@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(akai2sfz CXX)
+project(akai2sfz VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,7 @@ pkg_check_modules(SNDFILE REQUIRED sndfile)
 add_library(akai2sfz_core
     src/codec.cpp
     src/image.cpp
+    src/cd_container.cpp
     src/filesystem.cpp
     src/akai_format.cpp
     src/wav_writer.cpp
@@ -32,6 +33,7 @@ add_executable(akai2sfz
     apps/cli/main.cpp
 )
 target_link_libraries(akai2sfz PRIVATE akai2sfz_core)
+install(TARGETS akai2sfz RUNTIME DESTINATION bin)
 
 enable_testing()
 add_subdirectory(tests)

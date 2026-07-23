@@ -161,8 +161,9 @@ void MainWindow::log(const QString &line) {
 }
 
 void MainWindow::onBrowseImage() {
-  QString path = QFileDialog::getOpenFileName(this, "Selecione a imagem do CD Akai", QString(),
-                                                "Imagens ISO (*.iso);;Todos os arquivos (*)");
+  QString path = QFileDialog::getOpenFileName(
+      this, "Selecione a imagem do CD Akai", QString(),
+      "Imagens de CD (*.iso *.cue *.bin *.nrg *.mdf);;Todos os arquivos (*)");
   if (path.isEmpty()) return;
 
   imagePathEdit_->setText(path);
@@ -179,7 +180,7 @@ void MainWindow::onLoadImage() {
 
   std::string path = imagePathEdit_->text().toStdString();
   try {
-    device_ = std::make_unique<BlockDevice>(path);
+    device_ = open_cd_image(path);
     partitions_ = scan_partitions(*device_);
   } catch (const std::exception &e) {
     QMessageBox::critical(this, "Erro", QString("Falha ao abrir a imagem:\n%1").arg(e.what()));

@@ -90,9 +90,49 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
       expansível para ver os samples referenciados) -- S1000 e S3000 tratados
       igualmente.
 
-### Pendente
-- [ ] Containers MDF/NRG/BIN+CUE reais (hoje só imagem plana) — M1.
-- [ ] Empacotamento (M5).
+### M1 -- containers reais (BIN+CUE, NRG, MDF)
+- [x] `SectorLayout` no `BlockDevice`: mapeia bloco Akai (8192 bytes) para
+      bytes físicos considerando tamanho de setor físico, offset dos dados
+      úteis dentro do setor e um deslocamento de base -- o caso "plano" (ISO
+      simples) é o mesmo comportamento do M0, sem overhead extra.
+- [x] **BIN+CUE**: lê a cue sheet de verdade (`FILE`/`TRACK MODEx/yyyy`/
+      `INDEX 01`). Validado contra `TZIFFXAK.bin`+`.cue` reais: setor bruto
+      `MODE1/2352` (12 bytes de sync `00 FF×10 00` a cada 2352 bytes, dados
+      úteis nos 2048 bytes a partir do offset 16) -- confirmado porque o
+      campo de tamanho da partição Akai aparecia exatamente ali. Resolve
+      `.bin` sem `.cue` ao lado tolerando diferença de maiúscula/minúscula
+      no nome referenciado (comum em imagens rippadas no Windows).
+- [x] **NRG (Nero)**: lê o footer v2 (assinatura `NER5` de 4 bytes seguida
+      de um offset big-endian de 8 bytes, terminando exatamente no fim do
+      arquivo -- não o contrário, como a maioria da documentação informal
+      sugere) e caminha pelos chunks até achar `CUEX`, que dá o pregap e o
+      LBA 0 da track 1. Validado contra um NRG real (Mellotron): setor
+      "cooked" de 2048 bytes, pregap de 150 frames *incluído* no arquivo
+      (dados começam em `150 × 2048 = 307200`, não no byte 0). v1 (`NERO`)
+      implementado por analogia, sem amostra para validar.
+- [x] **Auto-detecção como rede de segurança**: sempre que há ambiguidade
+      (setor cooked vs. raw, ou o container `.nrg`/`.mdf` não dá certeza
+      total), `open_first_valid()` monta os candidatos plausíveis e usa
+      `scan_partitions()` -- que já valida magic+checksum do
+      `akai_parthead_s` -- como oráculo: o primeiro candidato que acha uma
+      partição Akai real é aceito. Isso evita ter que decifrar 100% de cada
+      formato proprietário.
+- [x] **MDF**: sem amostra real disponível neste projeto -- usa a mesma
+      auto-detecção (padrão de sync de CD presente/ausente) que o fallback
+      de `.bin` sem `.cue`. Não validado; ver riscos conhecidos abaixo.
+
+### M5 -- empacotamento (macOS)
+- [x] GUI como bundle `.app` de verdade (`MACOSX_BUNDLE`, `Info.plist`
+      próprio, versionado a partir de `project(... VERSION ...)`).
+- [x] Alvo `package_gui`: `macdeployqt` (bundla Qt e as dependências não-Qt
+      que ele arrasta junto, incluindo `libsndfile`) → reassinatura ad-hoc
+      (`codesign --force --deep --sign -`, necessária no Apple Silicon
+      porque o `macdeployqt` invalida a assinatura ao copiar libs para
+      dentro do bundle) → `.dmg` via `hdiutil`. Testado montando o `.dmg` e
+      abrindo o `.app` de dentro dele, como um usuário real faria.
+- [x] CLI com `install()` (`cmake --install build`), mas continua
+      dependendo de `libsndfile` via Homebrew quando rodada fora do bundle
+      da GUI -- não há um pacote standalone da CLI ainda (ver riscos).
 
 ### Riscos conhecidos / não totalmente validados
 - A codificação de afinação do S1000 (cents/semitons como bytes separados,
@@ -106,6 +146,18 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
   em todos os keygroups de um mesmo program), o que sugere que pode não ser
   o que o nome indica. S1000 não tem um campo equivalente documentado, por
   isso `transpose` fica sempre 0 nesse formato.
+- **MDF** e **NRG v1** não têm amostra real para validar neste projeto --
+  dependem inteiramente da auto-detecção por padrão de sync de CD (para
+  MDF) ou de uma leitura do footer feita por analogia com o v2 (para NRG
+  v1). `open_first_valid()` sempre confirma via `scan_partitions()` antes
+  de aceitar um layout, então o pior caso é "não encontrei partição válida"
+  em vez de dados corrompidos silenciosos -- mas um MDF ou NRG v1 real pode
+  expor um layout que os candidatos atuais não cobrem.
+- O `.dmg` gerado pelo M5 é assinado **ad-hoc** (`codesign --sign -`), não
+  com um Developer ID da Apple -- suficiente para uso pessoal ou
+  compartilhar entre máquinas confiáveis, mas o Gatekeeper vai reclamar
+  ("app de desenvolvedor não identificado") em instalações completamente
+  novas até o usuário liberar manualmente. Não há notarização.
 
 Plano completo de arquitetura e auditoria dos 6 repositórios: ver o artefato gerado
 na sessão que criou este projeto (auditoria de 2026-07-22).
@@ -122,22 +174,35 @@ cmake --build build
 Se o Qt6 não for encontrado, o build da GUI é pulado automaticamente e só a
 CLI é gerada (`-DAKAI2SFZ_BUILD_GUI=OFF` força isso).
 
+### Empacotar a GUI num `.app` + `.dmg` autônomos
+
+```sh
+cmake --build build --target package_gui
+```
+
+Gera `build/apps/gui/akai2sfz_gui.app` (Qt e `libsndfile` já embutidos,
+assinado ad-hoc) e `build/apps/gui/akai2sfz_gui.dmg` ao lado.
+
 ## Uso
 
 ### CLI
 
+Aceita `.iso`, `.cue`, `.bin` (com ou sem `.cue` ao lado), `.nrg` e `.mdf`.
+
 ```sh
-./build/apps/cli/akai2sfz list caminho/para/imagem.iso
-./build/apps/cli/akai2sfz extract caminho/para/imagem.iso "/VOLUME/ARQUIVO" ./saida
-./build/apps/cli/akai2sfz convert caminho/para/imagem.iso "/VOLUME/PROGRAM" ./saida
+./build/akai2sfz list caminho/para/imagem.iso
+./build/akai2sfz extract caminho/para/imagem.cue "/VOLUME/ARQUIVO" ./saida
+./build/akai2sfz convert caminho/para/imagem.nrg "/VOLUME/PROGRAM" ./saida
 ```
 
 ### GUI
 
 ```sh
-./build/apps/gui/akai2sfz_gui
+./build/apps/gui/akai2sfz_gui.app/Contents/MacOS/akai2sfz_gui   # direto do build
+# ou, depois de `cmake --build build --target package_gui`:
+open build/apps/gui/akai2sfz_gui.app
 ```
 
-Abra uma imagem ISO, navegue Partições → Volumes → Programs, clique num
-program para expandir e ver os samples referenciados, escolha o diretório de
-saída e converta.
+Abra uma imagem (ISO/CUE/BIN/NRG/MDF), navegue Partições → Volumes →
+Programs, clique num program para expandir e ver os samples referenciados,
+escolha o diretório de saída e converta.

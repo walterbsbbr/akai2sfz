@@ -30,8 +30,8 @@ std::string vol_type_label(raw::VolType t) {
 }
 
 int cmd_list(const std::string &image_path, std::size_t partition_1based) {
-  BlockDevice dev(image_path);
-  auto partitions = scan_partitions(dev);
+  auto dev = open_cd_image(image_path);
+  auto partitions = scan_partitions(*dev);
 
   if (partitions.empty()) {
     std::cerr << "nenhuma particao Akai valida encontrada em " << image_path << "\n";
@@ -48,7 +48,7 @@ int cmd_list(const std::string &image_path, std::size_t partition_1based) {
             << partitions[partition_1based - 1].start_block << ", "
             << partitions[partition_1based - 1].size_blocks << " blocos)\n\n";
 
-  OpenPartition part(dev, partitions[partition_1based - 1]);
+  OpenPartition part(*dev, partitions[partition_1based - 1]);
 
   std::size_t total_entries = 0;
   for (std::size_t vi = 0; vi < part.volume_count(); ++vi) {
@@ -92,13 +92,13 @@ int cmd_extract(const std::string &image_path, const std::string &akai_path,
     return 1;
   }
 
-  BlockDevice dev(image_path);
-  auto partitions = scan_partitions(dev);
+  auto dev = open_cd_image(image_path);
+  auto partitions = scan_partitions(*dev);
   if (partition_1based == 0 || partition_1based > partitions.size()) {
     std::cerr << "particao invalida\n";
     return 1;
   }
-  OpenPartition part(dev, partitions[partition_1based - 1]);
+  OpenPartition part(*dev, partitions[partition_1based - 1]);
 
   for (std::size_t vi = 0; vi < part.volume_count(); ++vi) {
     raw::VolType vtype = part.volume_type(vi);
@@ -134,13 +134,13 @@ int cmd_convert(const std::string &image_path, const std::string &akai_path,
     return 1;
   }
 
-  BlockDevice dev(image_path);
-  auto partitions = scan_partitions(dev);
+  auto dev = open_cd_image(image_path);
+  auto partitions = scan_partitions(*dev);
   if (partition_1based == 0 || partition_1based > partitions.size()) {
     std::cerr << "particao invalida\n";
     return 1;
   }
-  OpenPartition part(dev, partitions[partition_1based - 1]);
+  OpenPartition part(*dev, partitions[partition_1based - 1]);
 
   ConvertResult r = convert_program(part, vol_name, program_name, out_dir);
 
