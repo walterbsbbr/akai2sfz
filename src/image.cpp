@@ -13,8 +13,40 @@ namespace akai2sfz {
 
 using namespace raw;
 
+namespace {
+SectorLayout flat_layout(std::size_t block_size) {
+  SectorLayout l;
+  l.base_byte_offset = 0;
+  l.physical_sector_size = block_size;
+  l.user_data_offset = 0;
+  l.user_data_size = block_size;
+  return l;
+}
+
+void pread_full(int fd, std::uint8_t *out, std::size_t bytes, std::uint64_t offset,
+                 std::uint64_t file_size) {
+  if (offset + bytes > file_size) {
+    throw std::runtime_error("leitura fora dos limites da imagem");
+  }
+  std::size_t done = 0;
+  while (done < bytes) {
+    ssize_t n = ::pread(fd, out + done, bytes - done, static_cast<off_t>(offset + done));
+    if (n < 0) {
+      throw std::runtime_error("erro de leitura na imagem");
+    }
+    if (n == 0) {
+      throw std::runtime_error("fim de arquivo inesperado na imagem");
+    }
+    done += static_cast<std::size_t>(n);
+  }
+}
+} // namespace
+
 BlockDevice::BlockDevice(const std::string &path, std::size_t block_size)
-    : fd_(-1), block_size_(block_size), file_size_(0) {
+    : BlockDevice(path, block_size, flat_layout(block_size)) {}
+
+BlockDevice::BlockDevice(const std::string &path, std::size_t block_size, SectorLayout layout)
+    : fd_(-1), block_size_(block_size), file_size_(0), layout_(layout) {
   fd_ = ::open(path.c_str(), O_RDONLY);
   if (fd_ < 0) {
     throw std::runtime_error("nao foi possivel abrir a imagem: " + path);
@@ -34,25 +66,32 @@ BlockDevice::~BlockDevice() {
 }
 
 std::uint64_t BlockDevice::block_count() const {
-  return file_size_ / block_size_;
+  if (file_size_ <= layout_.base_byte_offset) return 0;
+  std::uint64_t data_bytes = file_size_ - layout_.base_byte_offset;
+  std::uint64_t logical_sectors = data_bytes / layout_.physical_sector_size;
+  std::uint64_t sectors_per_block = block_size_ / layout_.user_data_size;
+  return logical_sectors / sectors_per_block;
 }
 
 void BlockDevice::read_blocks(std::uint64_t start, std::size_t count, std::uint8_t *out) const {
-  const std::size_t bytes = count * block_size_;
-  const std::uint64_t offset = start * block_size_;
-  if (offset + bytes > file_size_) {
-    throw std::runtime_error("leitura fora dos limites da imagem");
+  if (is_flat()) {
+    // caminho original do M0: um unico pread contiguo.
+    const std::size_t bytes = count * block_size_;
+    const std::uint64_t offset = layout_.base_byte_offset + start * block_size_;
+    pread_full(fd_, out, bytes, offset, file_size_);
+    return;
   }
-  std::size_t done = 0;
-  while (done < bytes) {
-    ssize_t n = ::pread(fd_, out + done, bytes - done, static_cast<off_t>(offset + done));
-    if (n < 0) {
-      throw std::runtime_error("erro de leitura na imagem");
-    }
-    if (n == 0) {
-      throw std::runtime_error("fim de arquivo inesperado na imagem");
-    }
-    done += static_cast<std::size_t>(n);
+
+  // setor fisico != dados uteis (ex.: raw MODE1/2352): cada bloco Akai
+  // (block_size_ bytes) e composto de varios setores logicos de
+  // user_data_size bytes, cada um lido separadamente do meio do setor fisico.
+  const std::size_t sectors_per_block = block_size_ / layout_.user_data_size;
+  std::uint64_t logical_sector = start * sectors_per_block;
+
+  for (std::size_t i = 0; i < count * sectors_per_block; ++i, ++logical_sector) {
+    std::uint64_t offset = layout_.base_byte_offset + logical_sector * layout_.physical_sector_size
+        + layout_.user_data_offset;
+    pread_full(fd_, out + i * layout_.user_data_size, layout_.user_data_size, offset, file_size_);
   }
 }
 
