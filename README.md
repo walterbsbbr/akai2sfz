@@ -531,3 +531,13 @@ referenciados, e converta o próprio item. Para E-mu/Kurzweil, expanda um
 Bank/arquivo `.krz` para ver os Presets/Programs dentro dele -- é o
 Preset/Program que se seleciona e converte, não o Bank/arquivo. Escolha o
 diretório de saída e converta.
+
+**Conversão em lote**: a coluna Programs aceita seleção múltipla
+(Cmd+clique ou Shift+clique, como no Finder). Com vários itens convertíveis
+selecionados, o botão vira "Convert N selected programs" e cada um é
+convertido para sua **própria subpasta**, nomeada com o nome do
+program/patch/preset (sanitizado), dentro do diretório de saída escolhido --
+assim SFZs/WAVs de presets diferentes nunca colidem, mesmo quando muitos são
+convertidos de uma vez. Um único diálogo de resumo aparece no final (não um
+por item), com a contagem de sucesso/falha; detalhes de cada conversão
+(avisos, erros, caminho do SFZ) vão pro painel de log como sempre.

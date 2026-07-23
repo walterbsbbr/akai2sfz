@@ -40,7 +40,18 @@
 // icones e proporcional ao tamanho da fonte de cada QListWidget/QTreeWidget
 // (ver setIconSize() no construtor). Fontes das imagens originais:
 // `../../PICS` (logos de terceiros, uso interno/nao redistribuido).
+//
+// Conversao em lote: programTree_ usa ExtendedSelection, entao o usuario
+// pode selecionar varios itens convertiveis de uma vez (Cmd/Shift-click).
+// onConvertSelected() converte cada um pra sua PROPRIA subpasta (nomeada
+// com o nome do program/patch/preset, sanitizado) dentro do diretorio de
+// saida escolhido -- assim SFZs/WAVs de presets diferentes nunca colidem,
+// mesmo quando varios sao convertidos de uma vez. Os metodos
+// convertSelectedX() so resolvem o alvo e chamam o convert_* apropriado,
+// sem mostrar dialogo -- quem agrega os resultados e mostra o resumo final
+// (1 dialogo so, mesmo em lote) e o onConvertSelected().
 
+#include "akai2sfz/converter.hpp"
 #include "akai2sfz/emu_filesystem.hpp"
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"
@@ -73,7 +84,7 @@ private slots:
   void onLoadImage();
   void onPartitionSelectionChanged();
   void onVolumeSelectionChanged();
-  void onProgramCurrentItemChanged(QTreeWidgetItem *current, QTreeWidgetItem *previous);
+  void onProgramSelectionChanged();
   void onProgramItemExpanded(QTreeWidgetItem *item);
   void onConvertSelected();
   void onBrowseOutputDir();
@@ -85,21 +96,31 @@ private:
   void rebuildProgramTree();
   void loadProgramSamples(QTreeWidgetItem *programItem);
 
+  // true se `item` for uma unidade convertivel (Program Akai/Patch Roland/
+  // Preset E-mu/Program Kurzweil) dado o fabricante atual -- usado tanto
+  // pra habilitar o botao quanto pra filtrar a selecao no lote.
+  bool isConvertibleItem(QTreeWidgetItem *item) const;
+  // Nome "humano" do item (pra nome da subpasta de saida e pro log).
+  QString itemConvertName(QTreeWidgetItem *item) const;
+  // Despacha pro convertSelectedX apropriado.
+  akai2sfz::ConvertResult convertItem(QTreeWidgetItem *item, const QString &outDir);
+  akai2sfz::ConvertResult convertSelectedAkai(QTreeWidgetItem *programItem, const QString &outDir);
+
   // Ramos especificos de fabricante chamados pelos metodos acima quando
   // isRoland_ e verdadeiro.
   void rebuildProgramTreeRoland();
   void loadPatchPartialsRoland(QTreeWidgetItem *patchItem);
-  void convertSelectedRoland(QTreeWidgetItem *patchItem, const QString &outDir);
+  akai2sfz::ConvertResult convertSelectedRoland(QTreeWidgetItem *patchItem, const QString &outDir);
 
   // Idem para E-mu (isEmu_ == true).
   void rebuildProgramTreeEmu();
   void loadBankPresetsEmu(QTreeWidgetItem *bankItem);
-  void convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &outDir);
+  akai2sfz::ConvertResult convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &outDir);
 
   // Idem para Kurzweil (isKurzweil_ == true).
   void rebuildProgramTreeKurzweil();
   void loadProgramsKurzweil(QTreeWidgetItem *krzFileItem);
-  void convertSelectedKurzweil(QTreeWidgetItem *programItem, const QString &outDir);
+  akai2sfz::ConvertResult convertSelectedKurzweil(QTreeWidgetItem *programItem, const QString &outDir);
 
   QLineEdit *imagePathEdit_ = nullptr;
   QPushButton *browseBtn_ = nullptr;

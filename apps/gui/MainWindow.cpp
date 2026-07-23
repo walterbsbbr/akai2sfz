@@ -9,6 +9,7 @@
 #include "akai2sfz/roland_converter.hpp"
 #include "akai2sfz/roland_format.hpp"
 
+#include <QAbstractItemView>
 #include <QFileDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -123,6 +124,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   programTree_ = new QTreeWidget(progBox);
   programTree_->setHeaderHidden(true);
   programTree_->setColumnCount(1);
+  // Selecao multipla (Cmd/Shift-click) -- permite converter varios presets
+  // de uma vez, ver onConvertSelected().
+  programTree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   progLayout->addWidget(programTree_);
   splitter->addWidget(progBox);
 
@@ -181,8 +185,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &MainWindow::onPartitionSelectionChanged);
   connect(volumeList_, &QListWidget::currentRowChanged, this,
           &MainWindow::onVolumeSelectionChanged);
-  connect(programTree_, &QTreeWidget::currentItemChanged, this,
-          &MainWindow::onProgramCurrentItemChanged);
+  connect(programTree_, &QTreeWidget::itemSelectionChanged, this,
+          &MainWindow::onProgramSelectionChanged);
   connect(programTree_, &QTreeWidget::itemExpanded, this, &MainWindow::onProgramItemExpanded);
 
   log("WJ-VSC started. Open an Akai (S1000/S3000), Roland (S-750/760/770), E-mu "
@@ -217,6 +221,7 @@ void MainWindow::onLoadImage() {
   kurzweilDisk_.reset();
   kurzweilDevice_.reset();
   convertBtn_->setEnabled(false);
+  convertBtn_->setText("Convert selected program");
 
   std::string path = imagePathEdit_->text().toStdString();
 
@@ -338,6 +343,7 @@ void MainWindow::onPartitionSelectionChanged() {
   volumeList_->clear();
   programTree_->clear();
   convertBtn_->setEnabled(false);
+  convertBtn_->setText("Convert selected program");
 
   if (isRoland_ || isEmu_ || isKurzweil_) {
     rebuildVolumeList();
@@ -430,6 +436,7 @@ void MainWindow::rebuildVolumeList() {
 void MainWindow::onVolumeSelectionChanged() {
   programTree_->clear();
   convertBtn_->setEnabled(false);
+  convertBtn_->setText("Convert selected program");
 
   if (isRoland_) {
     rebuildProgramTreeRoland();
@@ -808,31 +815,34 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
   }
 }
 
-void MainWindow::onProgramCurrentItemChanged(QTreeWidgetItem *current, QTreeWidgetItem *) {
-  if (!current) {
-    convertBtn_->setEnabled(false);
-    return;
-  }
+bool MainWindow::isConvertibleItem(QTreeWidgetItem *item) const {
+  if (!item) return false;
   if (isEmu_ || isKurzweil_) {
     // Ao contrario de Akai/Roland, quem e convertivel em E-mu/Kurzweil e o
     // Preset/Program (filho de um Bank/.KRZ), nao o item de topo -- um
     // bank/.KRZ agrupa varios presets/programs, entao ele proprio nao e
     // uma unidade convertivel.
-    convertBtn_->setEnabled(current->parent() != nullptr
-                             && current->data(0, kRolePresetName).isValid());
-    return;
+    return item->parent() != nullptr && item->data(0, kRolePresetName).isValid();
   }
-  if (current->parent() != nullptr) {
-    // sample/tecla (filho) em modo Akai/Roland -- nao convertivel diretamente
-    convertBtn_->setEnabled(false);
-    return;
+  if (item->parent() != nullptr) return false; // sample/tecla (filho) em Akai/Roland
+  if (isRoland_) return true; // todo item de topo em modo Roland e um Patch
+  QString ext = item->data(0, kRoleExt).toString();
+  return ext == "a3p" || ext == "a1p";
+}
+
+QString MainWindow::itemConvertName(QTreeWidgetItem *item) const {
+  if (isEmu_ || isKurzweil_) return item->data(0, kRolePresetName).toString();
+  return item->data(0, kRoleFileName).toString();
+}
+
+void MainWindow::onProgramSelectionChanged() {
+  int count = 0;
+  for (auto *item : programTree_->selectedItems()) {
+    if (isConvertibleItem(item)) ++count;
   }
-  if (isRoland_) {
-    convertBtn_->setEnabled(true); // todo item de topo em modo Roland e um Patch
-    return;
-  }
-  QString ext = current->data(0, kRoleExt).toString();
-  convertBtn_->setEnabled(ext == "a3p" || ext == "a1p");
+  convertBtn_->setEnabled(count > 0);
+  convertBtn_->setText(count > 1 ? QString("Convert %1 selected programs").arg(count)
+                                  : "Convert selected program");
 }
 
 void MainWindow::onBrowseOutputDir() {
@@ -840,167 +850,128 @@ void MainWindow::onBrowseOutputDir() {
   if (!dir.isEmpty()) outputDirEdit_->setText(dir);
 }
 
-void MainWindow::convertSelectedRoland(QTreeWidgetItem *patchItem, const QString &outDir) {
+akai2sfz::ConvertResult MainWindow::convertSelectedRoland(QTreeWidgetItem *patchItem,
+                                                           const QString &outDir) {
+  if (!rolandDisk_) {
+    ConvertResult r;
+    r.error = "no Roland disk open";
+    return r;
+  }
   QString patchName = patchItem->data(0, kRoleFileName).toString();
-
-  log(QString("Converting patch '%1'...").arg(patchName));
-  statusLabel_->setText("Converting...");
-
-  ConvertResult result = convert_roland_patch(*rolandDisk_, patchName.toStdString(),
-                                               outDir.toStdString());
-
-  for (const auto &w : result.warnings) {
-    log("warning: " + QString::fromStdString(w));
-  }
-
-  if (!result.success) {
-    log("error: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversion failed.");
-    return;
-  }
-
-  log(QString("OK: %1 (%2 WAV)")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversion complete.");
-  QMessageBox::information(
-      this, "Conversion complete",
-      QString("SFZ: %1\nWAV files: %2")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
+  return convert_roland_patch(*rolandDisk_, patchName.toStdString(), outDir.toStdString());
 }
 
-void MainWindow::convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &outDir) {
+akai2sfz::ConvertResult MainWindow::convertSelectedEmu(QTreeWidgetItem *presetItem,
+                                                        const QString &outDir) {
   QTreeWidgetItem *bankItem = presetItem->parent();
-  if (!bankItem) return;
-
+  if (!bankItem || !emuDisk_) {
+    ConvertResult r;
+    r.error = "invalid E-mu selection";
+    return r;
+  }
   QString bankName = bankItem->data(0, kRoleFileName).toString();
   QString presetName = presetItem->data(0, kRolePresetName).toString();
-  QString folderName = QString::fromStdString(currentFolderName_);
-
-  log(QString("Converting %1/%2/%3...").arg(folderName, bankName, presetName));
-  statusLabel_->setText("Converting...");
-
-  ConvertResult result = convert_emu_preset(*emuDisk_, currentFolderName_, bankName.toStdString(),
-                                             presetName.toStdString(), outDir.toStdString());
-
-  for (const auto &w : result.warnings) {
-    log("warning: " + QString::fromStdString(w));
-  }
-
-  if (!result.success) {
-    log("error: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversion failed.");
-    return;
-  }
-
-  log(QString("OK: %1 (%2 WAV)")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversion complete.");
-  QMessageBox::information(
-      this, "Conversion complete",
-      QString("SFZ: %1\nWAV files: %2")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
+  return convert_emu_preset(*emuDisk_, currentFolderName_, bankName.toStdString(),
+                             presetName.toStdString(), outDir.toStdString());
 }
 
-void MainWindow::convertSelectedKurzweil(QTreeWidgetItem *programItem, const QString &outDir) {
+akai2sfz::ConvertResult MainWindow::convertSelectedKurzweil(QTreeWidgetItem *programItem,
+                                                             const QString &outDir) {
   QTreeWidgetItem *krzFileItem = programItem->parent();
-  if (!krzFileItem) return;
-
+  if (!krzFileItem || !kurzweilDisk_) {
+    ConvertResult r;
+    r.error = "invalid Kurzweil selection";
+    return r;
+  }
   QString krzFileName = krzFileItem->data(0, kRoleFileName).toString();
   QString programName = programItem->data(0, kRolePresetName).toString();
-
-  log(QString("Converting %1/%2...").arg(krzFileName, programName));
-  statusLabel_->setText("Converting...");
-
-  ConvertResult result = convert_krz_program(*kurzweilDisk_, krzFileName.toStdString(),
-                                              programName.toStdString(), outDir.toStdString());
-
-  for (const auto &w : result.warnings) {
-    log("warning: " + QString::fromStdString(w));
-  }
-
-  if (!result.success) {
-    log("error: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversion failed.");
-    return;
-  }
-
-  log(QString("OK: %1 (%2 WAV)")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversion complete.");
-  QMessageBox::information(
-      this, "Conversion complete",
-      QString("SFZ: %1\nWAV files: %2")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
+  return convert_krz_program(*kurzweilDisk_, krzFileName.toStdString(),
+                              programName.toStdString(), outDir.toStdString());
 }
 
-void MainWindow::onConvertSelected() {
-  QTreeWidgetItem *progItem = programTree_->currentItem();
-  if (!progItem) return;
+akai2sfz::ConvertResult MainWindow::convertSelectedAkai(QTreeWidgetItem *programItem,
+                                                         const QString &outDir) {
+  if (!partition_) {
+    ConvertResult r;
+    r.error = "no partition open";
+    return r;
+  }
+  QString volName = QString::fromStdString(partition_->volume_name(currentVolumeIndex_));
+  QString fileName = programItem->data(0, kRoleFileName).toString();
+  return convert_program(*partition_, volName.toStdString(), fileName.toStdString(),
+                          outDir.toStdString());
+}
 
-  QString outDir = outputDirEdit_->text();
-  if (outDir.isEmpty()) {
+akai2sfz::ConvertResult MainWindow::convertItem(QTreeWidgetItem *item, const QString &outDir) {
+  if (isEmu_) return convertSelectedEmu(item, outDir);
+  if (isKurzweil_) return convertSelectedKurzweil(item, outDir);
+  if (isRoland_) return convertSelectedRoland(item, outDir);
+  return convertSelectedAkai(item, outDir);
+}
+
+// Converte todos os itens convertiveis selecionados (1 ou varios -- Cmd/
+// Shift-click habilita lote). Cada um vai pra sua PROPRIA subpasta dentro
+// do diretorio escolhido, nomeada com o nome do program/patch/preset
+// sanitizado -- assim SFZs/WAVs de presets diferentes nunca colidem. Um so
+// dialogo de resumo no final, mesmo em lote (dialogo por item seria
+// inviavel com varias dezenas selecionadas).
+void MainWindow::onConvertSelected() {
+  QList<QTreeWidgetItem *> targets;
+  for (auto *item : programTree_->selectedItems()) {
+    if (isConvertibleItem(item)) targets.push_back(item);
+  }
+  if (targets.isEmpty()) return;
+
+  QString baseOutDir = outputDirEdit_->text();
+  if (baseOutDir.isEmpty()) {
     QMessageBox::warning(this, "Output Directory",
                           "Choose an output directory before converting.");
     return;
   }
 
-  if (isEmu_) {
-    if (!emuDisk_ || progItem->parent() == nullptr) return;
-    convertSelectedEmu(progItem, outDir);
-    return;
+  int successCount = 0;
+  int totalWav = 0;
+  QStringList failedNames;
+
+  for (auto *item : targets) {
+    QString name = itemConvertName(item);
+    QString subDir = baseOutDir + "/" + QString::fromStdString(sanitize_filename(name.toStdString()));
+
+    log(QString("Converting '%1' -> %2 ...").arg(name, subDir));
+    statusLabel_->setText(QString("Converting (%1/%2)...").arg(successCount + failedNames.size() + 1)
+                               .arg(targets.size()));
+
+    ConvertResult result = convertItem(item, subDir);
+
+    for (const auto &w : result.warnings) {
+      log("warning: " + QString::fromStdString(w));
+    }
+
+    if (!result.success) {
+      log("error: " + QString::fromStdString(result.error));
+      failedNames << name;
+      continue;
+    }
+
+    log(QString("OK: %1 (%2 WAV)")
+            .arg(QString::fromStdString(result.sfz_path))
+            .arg(result.wav_paths.size()));
+    ++successCount;
+    totalWav += static_cast<int>(result.wav_paths.size());
   }
 
-  if (isKurzweil_) {
-    if (!kurzweilDisk_ || progItem->parent() == nullptr) return;
-    convertSelectedKurzweil(progItem, outDir);
-    return;
+  QString summary = targets.size() == 1
+      ? QString("%1/%2 converted (%3 WAV file(s)).").arg(successCount).arg(targets.size()).arg(totalWav)
+      : QString("%1/%2 presets converted successfully (%3 WAV files total).")
+            .arg(successCount)
+            .arg(targets.size())
+            .arg(totalWav);
+  statusLabel_->setText(summary);
+
+  if (failedNames.isEmpty()) {
+    QMessageBox::information(this, "Conversion complete", summary);
+  } else {
+    QMessageBox::warning(this, "Conversion finished with errors",
+                          summary + "\n\nFailed: " + failedNames.join(", "));
   }
-
-  if (progItem->parent() != nullptr) return;
-
-  if (isRoland_) {
-    if (!rolandDisk_) return;
-    convertSelectedRoland(progItem, outDir);
-    return;
-  }
-
-  if (!partition_) return;
-  QString volName = QString::fromStdString(partition_->volume_name(currentVolumeIndex_));
-  QString fileName = progItem->data(0, kRoleFileName).toString();
-
-  log(QString("Converting %1/%2...").arg(volName, fileName));
-  statusLabel_->setText("Converting...");
-
-  ConvertResult result = convert_program(*partition_, volName.toStdString(),
-                                          fileName.toStdString(), outDir.toStdString());
-
-  for (const auto &w : result.warnings) {
-    log("warning: " + QString::fromStdString(w));
-  }
-
-  if (!result.success) {
-    log("error: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversion failed.");
-    return;
-  }
-
-  log(QString("OK: %1 (%2 WAV)")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversion complete.");
-  QMessageBox::information(
-      this, "Conversion complete",
-      QString("SFZ: %1\nWAV files: %2")
-          .arg(QString::fromStdString(result.sfz_path))
-          .arg(result.wav_paths.size()));
 }
