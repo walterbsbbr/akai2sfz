@@ -204,7 +204,8 @@ void MainWindow::onLoadImage() {
 void MainWindow::rebuildPartitionList() {
   partitionList_->clear();
   for (std::size_t i = 0; i < partitions_.size(); ++i) {
-    QString label = QString("Particao %1  (%2 blocos)").arg(i + 1).arg(partitions_[i].size_blocks);
+    QString letter = QString::fromStdString(partition_label(i));
+    QString label = QString("Particao %1  (%2 blocos)").arg(letter).arg(partitions_[i].size_blocks);
     auto *item = new QListWidgetItem(label, partitionList_);
     item->setData(kRolePartitionIndex, static_cast<qulonglong>(i));
   }

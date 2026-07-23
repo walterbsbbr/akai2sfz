@@ -43,9 +43,10 @@ int cmd_list(const std::string &image_path, std::size_t partition_1based) {
     return 1;
   }
 
-  std::cerr << partitions.size() << " particao(oes) encontrada(s); listando #"
-            << partition_1based << " (bloco inicial " << partitions[partition_1based - 1].start_block
-            << ", " << partitions[partition_1based - 1].size_blocks << " blocos)\n\n";
+  std::cerr << partitions.size() << " particao(oes) encontrada(s); listando particao "
+            << partition_label(partition_1based - 1) << " (bloco inicial "
+            << partitions[partition_1based - 1].start_block << ", "
+            << partitions[partition_1based - 1].size_blocks << " blocos)\n\n";
 
   OpenPartition part(dev, partitions[partition_1based - 1]);
 

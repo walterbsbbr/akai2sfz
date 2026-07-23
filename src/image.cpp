@@ -116,4 +116,11 @@ std::vector<Partition> scan_partitions(const BlockDevice &dev) {
   return result;
 }
 
+std::string partition_label(std::size_t index_0based) {
+  if (index_0based < 26) {
+    return std::string(1, static_cast<char>('A' + index_0based));
+  }
+  return "P" + std::to_string(index_0based + 1);
+}
+
 } // namespace akai2sfz

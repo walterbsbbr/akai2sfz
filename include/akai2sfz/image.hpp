@@ -53,4 +53,9 @@ struct Partition {
 // do arquivo.
 std::vector<Partition> scan_partitions(const BlockDevice &dev);
 
+// Letra de particao no estilo akaiutil/Akai (part[pi].letter = 'A' + pi em
+// akaiutil.cc): particao 0 (0-based) = 'A', 1 = 'B', etc. Alem de 26
+// particoes (nunca deve acontecer numa imagem de CD real) cai para "P<n>".
+std::string partition_label(std::size_t index_0based);
+
 } // namespace akai2sfz
