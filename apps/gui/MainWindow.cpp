@@ -3,6 +3,9 @@
 #include "akai2sfz/converter.hpp"
 #include "akai2sfz/emu_converter.hpp"
 #include "akai2sfz/emu_format.hpp"
+#include "akai2sfz/krz_converter.hpp"
+#include "akai2sfz/krz_format.hpp"
+#include "akai2sfz/krz_raw_format.hpp"
 #include "akai2sfz/roland_converter.hpp"
 #include "akai2sfz/roland_format.hpp"
 
@@ -76,7 +79,7 @@ constexpr int kRolePresetName = Qt::UserRole + 3; // E-mu: nome do preset (item 
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-  setWindowTitle("akai2sfz -- leitor de CD Akai/Roland/E-mu e conversor para SFZ");
+  setWindowTitle("akai2sfz -- leitor de CD Akai/Roland/E-mu/Kurzweil e conversor para SFZ");
 
   auto *central = new QWidget(this);
   auto *mainLayout = new QVBoxLayout(central);
@@ -165,8 +168,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &MainWindow::onProgramCurrentItemChanged);
   connect(programTree_, &QTreeWidget::itemExpanded, this, &MainWindow::onProgramItemExpanded);
 
-  log("akai2sfz iniciado. Abra uma imagem de CD Akai (S1000/S3000), Roland (S-750/760/770) ou "
-      "E-mu (EIII/ESI-32/EIV) para comecar -- o fabricante e detectado automaticamente.");
+  log("akai2sfz iniciado. Abra uma imagem de CD Akai (S1000/S3000), Roland (S-750/760/770), "
+      "E-mu (EIII/ESI-32/EIV) ou Kurzweil (K2000/K2500/K2600) para comecar -- o fabricante e "
+      "detectado automaticamente.");
 }
 
 void MainWindow::log(const QString &line) {
@@ -193,6 +197,8 @@ void MainWindow::onLoadImage() {
   rolandDevice_.reset();
   emuDisk_.reset();
   emuDevice_.reset();
+  kurzweilDisk_.reset();
+  kurzweilDevice_.reset();
   convertBtn_->setEnabled(false);
 
   std::string path = imagePathEdit_->text().toStdString();
@@ -207,6 +213,7 @@ void MainWindow::onLoadImage() {
       rolandDisk_ = std::make_unique<RolandDisk>(*rolandDevice_);
       isRoland_ = true;
       isEmu_ = false;
+      isKurzweil_ = false;
       log(QString("Disco Roland detectado: '%1'.")
               .arg(QString::fromStdString(rolandDisk_->drive_name())));
       rebuildPartitionList();
@@ -217,16 +224,36 @@ void MainWindow::onLoadImage() {
       emuDisk_ = std::make_unique<EmuDisk>(*emuDevice_);
       isRoland_ = false;
       isEmu_ = true;
+      isKurzweil_ = false;
       log("Disco E-mu detectado (EIII/ESI-32/EIV, container EMU3).");
       rebuildPartitionList();
       return;
     }
   } catch (const std::exception &) {
-    // nao e Roland nem E-mu (ou erro ao abrir) -- cai para Akai abaixo
+    // nao e Roland nem E-mu (ou erro ao abrir) -- cai para Kurzweil/Akai abaixo
+  }
+
+  // Kurzweil usa seu proprio abridor de container (block_size=2048, sem
+  // relacao com o BlockDevice de 512 B acima).
+  try {
+    auto kdev = open_kurzweil_cd_image(path);
+    if (looks_like_kurzweil(*kdev)) {
+      kurzweilDevice_ = std::move(kdev);
+      kurzweilDisk_ = std::make_unique<KurzweilDisk>(*kurzweilDevice_);
+      isRoland_ = false;
+      isEmu_ = false;
+      isKurzweil_ = true;
+      log("Disco Kurzweil detectado (FAT16, formato .krz).");
+      rebuildPartitionList();
+      return;
+    }
+  } catch (const std::exception &) {
+    // nao e Kurzweil (ou erro ao abrir) -- cai para Akai abaixo
   }
 
   isRoland_ = false;
   isEmu_ = false;
+  isKurzweil_ = false;
   try {
     device_ = open_cd_image(path);
     partitions_ = scan_partitions(*device_);
@@ -239,7 +266,7 @@ void MainWindow::onLoadImage() {
   if (partitions_.empty()) {
     QMessageBox::warning(this, "Nenhuma particao",
                           "Nenhuma particao Akai valida foi encontrada nesta imagem, e ela nao "
-                          "tem a assinatura de um disco Roland nem de um disco E-mu.");
+                          "tem a assinatura de um disco Roland, E-mu ou Kurzweil.");
     statusLabel_->setText("Nenhuma particao valida encontrada.");
     return;
   }
@@ -268,6 +295,13 @@ void MainWindow::rebuildPartitionList() {
     return;
   }
 
+  if (isKurzweil_) {
+    auto *item = new QListWidgetItem("Disco Kurzweil", partitionList_);
+    item->setData(kRolePartitionIndex, static_cast<qulonglong>(0));
+    partitionList_->setCurrentRow(0); // dispara onPartitionSelectionChanged
+    return;
+  }
+
   for (std::size_t i = 0; i < partitions_.size(); ++i) {
     QString letter = QString::fromStdString(partition_label(i));
     QString label = QString("Particao %1  (%2 blocos)").arg(letter).arg(partitions_[i].size_blocks);
@@ -284,7 +318,7 @@ void MainWindow::onPartitionSelectionChanged() {
   programTree_->clear();
   convertBtn_->setEnabled(false);
 
-  if (isRoland_ || isEmu_) {
+  if (isRoland_ || isEmu_ || isKurzweil_) {
     rebuildVolumeList();
     return;
   }
@@ -340,6 +374,16 @@ void MainWindow::rebuildVolumeList() {
     return;
   }
 
+  if (isKurzweil_) {
+    // Navegacao por pasta ainda nao implementada na GUI (o FAT16 pode ter
+    // subdiretorios de verdade, mas a busca de .KRZ e sempre recursiva na
+    // arvore inteira) -- um unico pseudo-item, mesmo padrao do Roland.
+    auto *item = new QListWidgetItem("(todos os arquivos .krz)", volumeList_);
+    item->setData(kRoleVolumeIndex, static_cast<qulonglong>(0));
+    if (volumeList_->count() > 0) volumeList_->setCurrentRow(0);
+    return;
+  }
+
   if (!partition_) return;
   for (std::size_t vi = 0; vi < partition_->volume_count(); ++vi) {
     raw::VolType vtype = partition_->volume_type(vi);
@@ -371,6 +415,11 @@ void MainWindow::onVolumeSelectionChanged() {
     if (!item) return;
     currentFolderName_ = item->data(kRoleFolderName).toString().toStdString();
     rebuildProgramTreeEmu();
+    return;
+  }
+
+  if (isKurzweil_) {
+    rebuildProgramTreeKurzweil();
     return;
   }
 
@@ -425,6 +474,40 @@ void MainWindow::rebuildProgramTreeEmu() {
   }
 }
 
+namespace {
+void collectKrzFilesRecursive(const akai2sfz::KurzweilDisk &disk,
+                               const std::vector<akai2sfz::KurzweilDirEntry> &entries,
+                               std::vector<akai2sfz::KurzweilDirEntry> *out) {
+  for (const auto &e : entries) {
+    if (e.is_directory) {
+      collectKrzFilesRecursive(disk, disk.list_directory(e), out);
+    } else {
+      out->push_back(e);
+    }
+  }
+}
+} // namespace
+
+void MainWindow::rebuildProgramTreeKurzweil() {
+  programTree_->clear();
+  if (!kurzweilDisk_) return;
+
+  std::vector<KurzweilDirEntry> files;
+  collectKrzFilesRecursive(*kurzweilDisk_, kurzweilDisk_->list_root(), &files);
+
+  for (const auto &f : files) {
+    QString name = QString::fromStdString(f.name);
+    auto *item = new QTreeWidgetItem(programTree_, {name});
+    item->setData(0, kRoleFileName, name);
+    // filho placeholder so para mostrar a seta de expandir; substituido
+    // pelos Programs reais em onProgramItemExpanded.
+    auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
+    placeholder->setData(0, kRolePlaceholder, true);
+  }
+
+  statusLabel_->setText(QString("%1 arquivo(s) .krz encontrado(s) na imagem.").arg(files.size()));
+}
+
 void MainWindow::rebuildProgramTree() {
   programTree_->clear();
   if (!partition_) return;
@@ -471,6 +554,8 @@ void MainWindow::onProgramItemExpanded(QTreeWidgetItem *item) {
     loadPatchPartialsRoland(item);
   } else if (isEmu_) {
     loadBankPresetsEmu(item);
+  } else if (isKurzweil_) {
+    loadProgramsKurzweil(item);
   } else {
     loadProgramSamples(item);
   }
@@ -598,6 +683,48 @@ void MainWindow::loadBankPresetsEmu(QTreeWidgetItem *bankItem) {
   }
 }
 
+void MainWindow::loadProgramsKurzweil(QTreeWidgetItem *krzFileItem) {
+  if (!kurzweilDisk_) return;
+
+  std::string fileName = krzFileItem->data(0, kRoleFileName).toString().toStdString();
+
+  try {
+    std::vector<KurzweilDirEntry> files;
+    collectKrzFilesRecursive(*kurzweilDisk_, kurzweilDisk_->list_root(), &files);
+
+    const KurzweilDirEntry *entry = nullptr;
+    for (const auto &f : files) {
+      if (f.name == fileName) {
+        entry = &f;
+        break;
+      }
+    }
+    if (!entry) {
+      new QTreeWidgetItem(krzFileItem, {"(arquivo nao encontrado)"});
+      return;
+    }
+
+    auto bytes = kurzweilDisk_->read_file(*entry);
+    krz_read_osize(bytes); // valida o magic "PRAM"
+    auto objects = list_krz_objects(bytes);
+
+    int shown = 0;
+    for (const auto &o : objects) {
+      if (o.type_raw != static_cast<int>(krz_raw::ObjectType::Program)) continue;
+      QString name = QString::fromStdString(o.name);
+      auto *item = new QTreeWidgetItem(krzFileItem, {name});
+      item->setData(0, kRolePresetName, name);
+      ++shown;
+    }
+
+    if (shown == 0) {
+      new QTreeWidgetItem(krzFileItem, {"(sem programs)"});
+    }
+  } catch (const std::exception &e) {
+    new QTreeWidgetItem(krzFileItem, {QString("(erro ao ler .krz: %1)").arg(e.what())});
+  }
+}
+
 void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
   if (!partition_) return;
 
@@ -656,10 +783,11 @@ void MainWindow::onProgramCurrentItemChanged(QTreeWidgetItem *current, QTreeWidg
     convertBtn_->setEnabled(false);
     return;
   }
-  if (isEmu_) {
-    // Ao contrario de Akai/Roland, quem e convertivel em E-mu e o Preset
-    // (filho de um Bank), nao o item de topo -- um bank agrupa varios
-    // presets, entao ele proprio nao e uma unidade convertivel.
+  if (isEmu_ || isKurzweil_) {
+    // Ao contrario de Akai/Roland, quem e convertivel em E-mu/Kurzweil e o
+    // Preset/Program (filho de um Bank/.KRZ), nao o item de topo -- um
+    // bank/.KRZ agrupa varios presets/programs, entao ele proprio nao e
+    // uma unidade convertivel.
     convertBtn_->setEnabled(current->parent() != nullptr
                              && current->data(0, kRolePresetName).isValid());
     return;
@@ -749,6 +877,41 @@ void MainWindow::convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &
           .arg(result.wav_paths.size()));
 }
 
+void MainWindow::convertSelectedKurzweil(QTreeWidgetItem *programItem, const QString &outDir) {
+  QTreeWidgetItem *krzFileItem = programItem->parent();
+  if (!krzFileItem) return;
+
+  QString krzFileName = krzFileItem->data(0, kRoleFileName).toString();
+  QString programName = programItem->data(0, kRolePresetName).toString();
+
+  log(QString("Convertendo %1/%2...").arg(krzFileName, programName));
+  statusLabel_->setText("Convertendo...");
+
+  ConvertResult result = convert_krz_program(*kurzweilDisk_, krzFileName.toStdString(),
+                                              programName.toStdString(), outDir.toStdString());
+
+  for (const auto &w : result.warnings) {
+    log("aviso: " + QString::fromStdString(w));
+  }
+
+  if (!result.success) {
+    log("erro: " + QString::fromStdString(result.error));
+    QMessageBox::critical(this, "Conversao falhou", QString::fromStdString(result.error));
+    statusLabel_->setText("Conversao falhou.");
+    return;
+  }
+
+  log(QString("OK: %1 (%2 WAV)")
+          .arg(QString::fromStdString(result.sfz_path))
+          .arg(result.wav_paths.size()));
+  statusLabel_->setText("Conversao concluida.");
+  QMessageBox::information(
+      this, "Conversao concluida",
+      QString("SFZ: %1\nArquivos WAV: %2")
+          .arg(QString::fromStdString(result.sfz_path))
+          .arg(result.wav_paths.size()));
+}
+
 void MainWindow::onConvertSelected() {
   QTreeWidgetItem *progItem = programTree_->currentItem();
   if (!progItem) return;
@@ -763,6 +926,12 @@ void MainWindow::onConvertSelected() {
   if (isEmu_) {
     if (!emuDisk_ || progItem->parent() == nullptr) return;
     convertSelectedEmu(progItem, outDir);
+    return;
+  }
+
+  if (isKurzweil_) {
+    if (!kurzweilDisk_ || progItem->parent() == nullptr) return;
+    convertSelectedKurzweil(progItem, outDir);
     return;
   }
 

@@ -8,3 +8,6 @@ target_link_libraries(roland_probe PRIVATE akai2sfz_core)
 
 add_executable(emu_probe emu_probe.cpp)
 target_link_libraries(emu_probe PRIVATE akai2sfz_core)
+
+add_executable(kurzweil_probe kurzweil_probe.cpp)
+target_link_libraries(kurzweil_probe PRIVATE akai2sfz_core)

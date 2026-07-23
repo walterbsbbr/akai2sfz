@@ -29,6 +29,9 @@ add_library(akai2sfz_core
     src/emu_filesystem.cpp
     src/emu_format.cpp
     src/emu_converter.cpp
+    src/kurzweil_filesystem.cpp
+    src/krz_format.cpp
+    src/krz_converter.cpp
 )
 target_include_directories(akai2sfz_core PUBLIC include)
 target_include_directories(akai2sfz_core PRIVATE ${SNDFILE_INCLUDE_DIRS})

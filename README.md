@@ -1,8 +1,9 @@
 # akai2sfz
 
 Conversor nativo em C++ de imagens de CD/HD dos samplers **Akai S900/S1000/S3000**,
-**Roland S-750/S-760/S-770** e **E-mu Emulator III/IIIx/ESI-32/IV** (formato de bank
-"EMU3 flat") para **SFZ** + WAV.
+**Roland S-750/S-760/S-770**, **E-mu Emulator III/IIIx/ESI-32/IV** (formato de bank
+"EMU3 flat") e **Kurzweil K2000/K2500/K2600** (formato de objeto `.krz` sobre FAT16)
+para **SFZ** + WAV.
 
 Este projeto começa como a camada de filesystem Akai (M0 do plano de arquitetura) e vai
 crescer em cima do trabalho já existente no diretório `AKAI/`/`ROLAND/` deste
@@ -107,6 +108,52 @@ real com múltiplos samples (não um bank vazio, que mascara o problema):
   inteiro só não quebrava num bank vazio de 1 cluster (caso degenerado onde as duas
   interpretações coincidem); um bank real de vários samples truncava e derrubava a
   leitura do 2º sample em diante até a correção.
+
+### Kurzweil K2000/K2500/K2600
+
+Dois formatos completamente diferentes, em duas camadas:
+
+- **Container de disco** (`include/akai2sfz/kurzweil_raw_format.hpp`): **FAT16 padrão**,
+  sem nenhuma extensão proprietária — confirmado pela ferramenta `kcdread` (C++, Marc
+  Halbrügge, GPLv2, 2002) — `../KURZWEIL/kcdread`. O boot sector, BPB, cadeia de FAT e
+  entradas de diretório 8.3 são o mesmo layout de qualquer disquete/HD DOS da época; a
+  única particularidade é o OEM-name `"KMSI"` (Kurzweil Music System Inc.) no boot
+  sector, que o próprio autor do `kcdread` já notava. `kcdread` não sabia ler o
+  formato `.krz` em si — só a camada de disco.
+- **Formato de objeto `.krz`** (`include/akai2sfz/krz_raw_format.hpp`): magic `"PRAM"`,
+  tabela de objetos encadeada para trás (cada bloco começa com um tamanho *negativo*
+  cujo módulo dá a distância até o anterior) contendo objetos `Sample`/`Keymap`/
+  `Program`. Vem de duas fontes que concordam entre si:
+  - **`wav2krz`** (Python, `xrisw.aeae`) — `../KURZWEIL/wav2krz`. Tradução do projeto
+    Java "KurzFiler" (SourceForge). Fonte de maior confiança: **escreve** arquivos
+    `.krz` carregáveis em hardware real (o histórico do git documenta um bugfix de
+    afinação, "-1ct bug", encontrado testando contra hardware de verdade).
+  - **`krz2wav`** (Haxe) — `../KURZWEIL/krz2wav`. Leitor independente que confirma o
+    header PRAM, a cadeia de blocos negativa e o parsing de Sample de forma
+    consistente com o `wav2krz`.
+
+Todos os offsets foram revalidados campo a campo contra um CD real (`TZMSKRZ.bin`+
+`.cue`, 31 arquivos `.krz`, presente na raiz do diretório `KURZWEIL/`): a cadeia
+completa Program → Layer → Keymap → tecla → Sample → PCM bate ponta a ponta, testada
+contra um program de bateria (31 layers, uma tecla cada) e um program de piano
+multi-sample (3 zonas cobrindo o teclado inteiro, com loop de sustain real). Essa
+validação **corrigiu dois pontos** que as fontes de terceiros erravam ou não
+documentavam:
+
+- O campo `keymap_id` do segmento `CAL` (referência Program→Keymap) fica no **byte 12**
+  do payload — uma fonte secundária indicava os bytes 7-8, que na prática não
+  correspondiam a nenhum keymap real. Confirmado progredindo idêntico ao id do
+  sample/keymap em 31 layers consecutivas de um program de bateria real (`200, 201,
+  202...230`).
+- O bloco de envelope de um Sample **não** tem tamanho fixo de 2×12 bytes (o que o
+  `wav2krz` sempre escreve ao gravar) — em arquivos gravados por hardware real esse
+  bloco varia (12 ou 14 bytes observados). O limite confiável é sempre o fim do bloco
+  do objeto (derivado do `block_size` negativo), nunca uma contagem fixa de
+  envelopes — o parser usa exatamente esse limite e nunca lê o conteúdo do envelope.
+- Achado à parte, não uma correção mas uma armadilha real do formato: os nomes de
+  arquivo no diretório FAT16 desse CD são preenchidos com espaço à **esquerda**
+  (`"  DRUMS1"`, não `"DRUMS1  "` como o FAT 8.3 clássico costuma fazer) — sem tratar
+  os dois lados no trim, nomes com menos de 8 caracteres nunca eram encontrados.
 
 Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
 
@@ -260,6 +307,41 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
       listagem do filesystem), expansíveis sob demanda para mostrar os
       Presets -- e é o Preset (filho), não o Bank, que é convertível.
 
+### KZ0-KZ2 -- suporte Kurzweil K2000/K2500/K2600
+- [x] Filesystem Kurzweil (`kurzweil_filesystem.hpp/cpp`): FAT16 padrão (BPB,
+      MBR opcional, cadeia de FAT de 16 bits, diretório raiz de tamanho fixo +
+      subdiretórios via cadeia de clusters, entradas 8.3). `open_kurzweil_cd_image()`
+      é um abridor de container separado do `open_cd_image()` do lado Akai --
+      lê `.iso`/`.cue`+`.bin` (`BlockDevice` de block_size=2048, a granularidade
+      "cooked" natural de um setor de CD-ROM) e faz endereçamento por byte por
+      cima disso, mesmo padrão de `RolandDisk::read_bytes`. Validado contra
+      `TZMSKRZ.bin`+`.cue` real (raw MODE1/2352, 31 arquivos `.krz` na raiz):
+      geometria decodificada e extração de arquivo conferidas byte a byte via
+      sonda (`tests/kurzweil_probe.cpp`, não faz parte do ctest).
+- [x] Parser de conteúdo `.krz` (`krz_format.hpp/cpp`): header PRAM, cadeia de
+      blocos, objetos Sample/Keymap/Program. Cadeia completa Program → Layer →
+      Keymap → tecla → Sample → PCM validada contra 5 arquivos `.krz` reais de
+      conteúdo bem diferente (bateria de 31 layers de 1 tecla cada; piano de 3
+      zonas cobrindo o teclado inteiro com loop de sustain real; um banco de
+      100 programs de synth).
+- [x] Conversão (`krz_converter.cpp`): reaproveita `SfzRegion`/`write_sfz`/
+      `write_wav_mono16` sem modificação. PCM 16-bit é big-endian no arquivo
+      (convertido pro nativo na extração). Um achado da validação contra dado
+      real: samples de percussão (ex. "808 Kick") tinham o bit de loop ligado
+      mas com `loop_start == sample_end` (loop de comprimento zero) -- tratado
+      como `no_loop`, não como um loop degenerado de 1 frame.
+- [x] CLI: `list`/`convert` detectam Kurzweil automaticamente (container e
+      block_size próprios, separados da detecção Roland/E-mu). `<ALVO>` para
+      Kurzweil é `ARQUIVO.KRZ/PROGRAM` (busca recursiva na árvore FAT16, já
+      que discos reais podem ter subdiretórios mesmo a amostra de teste sendo
+      plana). `extract` ainda é só Akai.
+- [x] GUI: mesmas 3 colunas, no mesmo espírito do E-mu (Program é o filho
+      convertível, não o arquivo `.krz`), mas com Volumes tratado como o
+      Roland -- navegação por pasta na GUI ainda não implementada (só no
+      CLI/converter, via busca recursiva), então Volumes é um único
+      pseudo-item e Programs lista todos os `.krz` encontrados na árvore
+      inteira.
+
 ### Riscos conhecidos / não totalmente validados
 - A codificação de afinação do S1000 (cents/semitons como bytes separados,
   `decode_s1000_tune` em `akai_format.cpp`) segue a descrição literal do doc
@@ -337,6 +419,43 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
   `FORM`/`E5B0`/`TOC2`/`E5P1`/`E5S1` respectivamente) -- fora de escopo desta
   fase; ficaria para um marco futuro dedicado (ver planejamento da sessão que
   adicionou o suporte a E-mu).
+- **Kurzweil -- crossfade de velocidade não confirmado**: cada Keymap tem até
+  8 "VeloLevel" (tabelas de 128 teclas cada, endereçadas por ponteiros
+  auto-relativos que podem colidir no mesmo endereço físico), mas só a
+  VeloLevel[0] é lida -- em todos os keymaps reais testados, as 8 posições
+  apontavam pro mesmo lugar (um único sample cobrindo a faixa toda), então
+  não havia caso real pra validar um crossfade genuíno. Se um CD real tiver
+  camadas de velocidade de fato distintas, elas não aparecem no `.sfz`
+  gerado.
+- **Kurzweil -- volume, pan e afinação fina não mapeados**: `volume_adjust`
+  (Soundfilehead e KeymapEntry) e `max_pitch` (cents, mas com a tecla raiz já
+  embutida numa fórmula logarítmica não trivial de inverter com confiança)
+  são parseados mas não convertidos -- só `pitch_keycenter` (tecla raiz "crua"
+  do Soundfilehead), faixa de tecla/velocidade e loop chegam no `.sfz`.
+- **Kurzweil -- `subsample_number` em samples com múltiplos headers mono**:
+  validado só para o caso de sample mono com 1 header e sample estéreo com 2
+  headers (L/R). Um sample com vários headers mono (round-robin? camadas?) é
+  suportado no código (indexação 1-based por `subsample_number`) mas não foi
+  visto em nenhum arquivo real testado.
+- **Kurzweil -- segments de Program desconhecidos**: a tabela de
+  tag→tamanho (`krz_raw_format.hpp`) cobre PGM/LYR/FX/ASR/LFO/FUN/ENC/CAL/
+  HOB/KDFX/KB3 -- validada contra 1160 segments reais (4 programs de um CD)
+  sem nenhuma tag desconhecida, mas um Program cuja tag realmente caia fora
+  dessa tabela interrompe o parsing daquele Program no meio (única forma
+  segura de lidar com um tamanho de segmento desconhecido) em vez de travar
+  o programa inteiro.
+- **Kurzweil -- amostra de compressão proprietária não confirmada**: todo o
+  PCM lido é assumido 16-bit linear sem compressão -- nenhuma das fontes
+  disponíveis (`wav2krz`/`krz2wav`) implementa nem documenta um modo
+  comprimido, mas a Kurzweil é conhecida por ter usado compressão proprietária
+  em alguns contextos; se algum CD real usar isso, o áudio extraído sairia
+  como ruído.
+- **Kurzweil -- só K2000/K2500/K2600 (formato de bank "flat" clássico)**: o
+  byte de modo do segment PGM (`2`/`3`/`4`) é lido e exibido, mas nenhuma
+  diferença estrutural entre os três foi encontrada ou testada (só há CDs
+  K2000 disponíveis neste projeto). Formatos posteriores da linha PC3/Forte
+  (extensão `.for`, mencionado como projeto irmão do `wav2krz`) usam um
+  container diferente (`FORM`/`COOL`) e ficam fora de escopo.
 
 Plano completo de arquitetura e auditoria dos 6 repositórios Akai: ver o artefato da
 sessão que criou este projeto (2026-07-22). Plano de integração Roland: ver o artefato
@@ -368,7 +487,7 @@ assinado ad-hoc) e `build/apps/gui/akai2sfz_gui.dmg` ao lado.
 ### CLI
 
 Aceita `.iso`, `.cue`, `.bin` (com ou sem `.cue` ao lado), `.nrg` e `.mdf`. O
-fabricante (Akai, Roland ou E-mu) é detectado automaticamente pela imagem.
+fabricante (Akai, Roland, E-mu ou Kurzweil) é detectado automaticamente pela imagem.
 
 ```sh
 # Akai -- <ALVO> = VOLUME/PROGRAM
@@ -383,6 +502,10 @@ fabricante (Akai, Roland ou E-mu) é detectado automaticamente pela imagem.
 # E-mu -- <ALVO> = PASTA/BANK/PRESET
 ./build/akai2sfz list caminho/para/imagem_emu.iso
 ./build/akai2sfz convert caminho/para/imagem_emu.iso "Default Folder/Orbit bas 1/001 - Membrace" ./saida
+
+# Kurzweil -- <ALVO> = ARQUIVO.KRZ/PROGRAM (busca recursiva na arvore FAT16)
+./build/akai2sfz list caminho/para/imagem_kurzweil.cue
+./build/akai2sfz convert caminho/para/imagem_kurzweil.cue "DRUMS1.KRZ/808 Dance" ./saida
 ```
 
 `extract` e a opção `-p` (partição) ainda são só para Akai.
@@ -395,9 +518,10 @@ fabricante (Akai, Roland ou E-mu) é detectado automaticamente pela imagem.
 open build/apps/gui/akai2sfz_gui.app
 ```
 
-Abra uma imagem (Akai, Roland ou E-mu, qualquer formato de container
-suportado), navegue Partições → Volumes → Programs. Para Akai/Roland, clique
-num program/patch para expandir e ver os samples referenciados, e converta o
-próprio item. Para E-mu, expanda um Bank para ver os Presets dentro dele --
-é o Preset que se seleciona e converte, não o Bank. Escolha o diretório de
-saída e converta.
+Abra uma imagem (Akai, Roland, E-mu ou Kurzweil, qualquer formato de
+container suportado), navegue Partições → Volumes → Programs. Para
+Akai/Roland, clique num program/patch para expandir e ver os samples
+referenciados, e converta o próprio item. Para E-mu/Kurzweil, expanda um
+Bank/arquivo `.krz` para ver os Presets/Programs dentro dele -- é o
+Preset/Program que se seleciona e converte, não o Bank/arquivo. Escolha o
+diretório de saída e converta.

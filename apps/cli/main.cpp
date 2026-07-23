@@ -1,11 +1,13 @@
 // akai2sfz CLI -- list/extract/convert sobre a camada de filesystem
-// Akai (S1000/S3000), Roland (S-750/S-760/S-770) e E-mu (EIII/ESI-32/EIV,
-// formato de bank EMU3 flat).
+// Akai (S1000/S3000), Roland (S-750/S-760/S-770), E-mu (EIII/ESI-32/EIV,
+// formato de bank EMU3 flat) e Kurzweil (K2000/K2500/K2600, formato .krz).
 #include "akai2sfz/converter.hpp"
 #include "akai2sfz/emu_converter.hpp"
 #include "akai2sfz/emu_filesystem.hpp"
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"
+#include "akai2sfz/krz_converter.hpp"
+#include "akai2sfz/kurzweil_filesystem.hpp"
 #include "akai2sfz/roland_converter.hpp"
 #include "akai2sfz/roland_filesystem.hpp"
 
@@ -25,12 +27,14 @@ void print_usage(const char *argv0) {
       << "  " << argv0 << " extract <imagem> <VOLUME/ARQUIVO> <dir_saida> [-p particao]\n"
       << "  " << argv0 << " convert <imagem> <ALVO> <dir_saida> [-p particao]\n"
       << "\n"
-      << "O fabricante (Akai, Roland ou E-mu) e detectado automaticamente pela imagem.\n"
-      << "  Akai:   <ALVO> = VOLUME/PROGRAM (aceita programs S1000 .a1p ou S3000 .a3p)\n"
-      << "  Roland: <ALVO> = nome do Patch (ex.: \"KIK:Gretsch Kik5\"); 'extract' e "
+      << "O fabricante (Akai, Roland, E-mu ou Kurzweil) e detectado automaticamente pela imagem.\n"
+      << "  Akai:     <ALVO> = VOLUME/PROGRAM (aceita programs S1000 .a1p ou S3000 .a3p)\n"
+      << "  Roland:   <ALVO> = nome do Patch (ex.: \"KIK:Gretsch Kik5\"); 'extract' e "
          "'-p' nao se aplicam a Roland ainda\n"
-      << "  E-mu:   <ALVO> = PASTA/BANK/PRESET (ex.: \"Default Folder/Orbit bas 1/001 - "
-         "Membrace\"); 'extract' e '-p' nao se aplicam a E-mu ainda\n";
+      << "  E-mu:     <ALVO> = PASTA/BANK/PRESET (ex.: \"Default Folder/Orbit bas 1/001 - "
+         "Membrace\"); 'extract' e '-p' nao se aplicam a E-mu ainda\n"
+      << "  Kurzweil: <ALVO> = ARQUIVO.KRZ/PROGRAM (ex.: \"DRUMS1.KRZ/808 Dance\"); "
+         "'extract' e '-p' nao se aplicam a Kurzweil ainda\n";
 }
 
 // --- Akai ---
@@ -269,6 +273,65 @@ int cmd_convert_emu(EmuDisk &disk, const std::string &target, const std::string 
   return 0;
 }
 
+// --- Kurzweil ---
+
+void list_krz_files_recursive(const KurzweilDisk &disk,
+                               const std::vector<KurzweilDirEntry> &entries,
+                               const std::string &prefix, std::size_t *total) {
+  for (const auto &e : entries) {
+    if (e.is_directory) {
+      list_krz_files_recursive(disk, disk.list_directory(e), prefix + e.name + "/", total);
+    } else {
+      std::cout << "  " << prefix << e.name << "\n";
+      ++*total;
+    }
+  }
+}
+
+int cmd_list_kurzweil(const KurzweilDisk &disk) {
+  std::size_t total = 0;
+  list_krz_files_recursive(disk, disk.list_root(), "", &total);
+  std::cerr << "\ntotal: " << total << " arquivo(s) .krz\n";
+  return 0;
+}
+
+// Divide "ARQUIVO.KRZ/PROGRAM" em 2 partes (o nome do program pode conter
+// '/', entao so a PRIMEIRA barra separa -- diferente de VOLUME/PROGRAM do
+// Akai, aqui o nome do arquivo nunca tem barra).
+bool split_krzfile_program(const std::string &path, std::string &krz_file, std::string &program) {
+  std::string p = path;
+  if (!p.empty() && p.front() == '/') p.erase(p.begin());
+  auto slash = p.find('/');
+  if (slash == std::string::npos) return false;
+  krz_file = p.substr(0, slash);
+  program = p.substr(slash + 1);
+  return !krz_file.empty() && !program.empty();
+}
+
+int cmd_convert_kurzweil(const KurzweilDisk &disk, const std::string &target,
+                          const std::string &out_dir) {
+  std::string krz_file, program;
+  if (!split_krzfile_program(target, krz_file, program)) {
+    std::cerr << "caminho invalido, esperado ARQUIVO.KRZ/PROGRAM: " << target << "\n";
+    return 1;
+  }
+
+  ConvertResult r = convert_krz_program(disk, krz_file, program, out_dir);
+
+  for (const auto &w : r.warnings) {
+    std::cerr << "aviso: " << w << "\n";
+  }
+
+  if (!r.success) {
+    std::cerr << "erro: " << r.error << "\n";
+    return 1;
+  }
+
+  std::cerr << "SFZ: " << r.sfz_path << "\n";
+  std::cerr << "WAV: " << r.wav_paths.size() << " arquivo(s)\n";
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -302,6 +365,16 @@ int main(int argc, char **argv) {
         EmuDisk disk(rdev);
         return cmd_list_emu(disk);
       }
+      // Kurzweil usa seu proprio abridor de container (block_size=2048,
+      // sem relacao com o rdev de 512 B acima).
+      try {
+        auto kdev = open_kurzweil_cd_image(args[1]);
+        if (looks_like_kurzweil(*kdev)) {
+          KurzweilDisk disk(*kdev);
+          return cmd_list_kurzweil(disk);
+        }
+      } catch (const std::exception &) {
+      }
       return cmd_list_akai(args[1], partition);
     }
     if (args[0] == "extract" && args.size() >= 4) {
@@ -316,6 +389,14 @@ int main(int argc, char **argv) {
       if (looks_like_emu(rdev)) {
         EmuDisk disk(rdev);
         return cmd_convert_emu(disk, args[2], args[3]);
+      }
+      try {
+        auto kdev = open_kurzweil_cd_image(args[1]);
+        if (looks_like_kurzweil(*kdev)) {
+          KurzweilDisk disk(*kdev);
+          return cmd_convert_kurzweil(disk, args[2], args[3]);
+        }
+      } catch (const std::exception &) {
       }
       return cmd_convert_akai(args[1], args[2], args[3], partition);
     }

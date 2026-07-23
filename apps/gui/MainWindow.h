@@ -22,10 +22,19 @@
 // expansivel pra mostrar seus Presets (carregados sob demanda). Diferente
 // de Akai/Roland, quem e convertivel em E-mu e o Preset (filho), nao o
 // Bank (item de topo), porque um bank agrupa varios presets.
+//
+// Kurzweil (K2000/K2500/K2600, formato .krz sobre FAT16) segue o mesmo
+// desenho de E-mu (arquivo .KRZ ~ Bank, Program ~ Preset, convertivel e o
+// Program/filho) mas com Volumes tratado como o Roland: o FAT16 pode ter
+// subdiretorios de verdade, mas navegacao por pasta ainda nao foi
+// implementada na GUI (so no CLI, via busca recursiva) -- Volumes vira um
+// unico pseudo-item e Programs lista TODOS os .KRZ encontrados na arvore
+// inteira, nao so na raiz.
 
 #include "akai2sfz/emu_filesystem.hpp"
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"
+#include "akai2sfz/kurzweil_filesystem.hpp"
 #include "akai2sfz/roland_filesystem.hpp"
 
 #include <QMainWindow>
@@ -76,6 +85,11 @@ private:
   void loadBankPresetsEmu(QTreeWidgetItem *bankItem);
   void convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &outDir);
 
+  // Idem para Kurzweil (isKurzweil_ == true).
+  void rebuildProgramTreeKurzweil();
+  void loadProgramsKurzweil(QTreeWidgetItem *krzFileItem);
+  void convertSelectedKurzweil(QTreeWidgetItem *programItem, const QString &outDir);
+
   QLineEdit *imagePathEdit_ = nullptr;
   QPushButton *browseBtn_ = nullptr;
   QPushButton *loadBtn_ = nullptr;
@@ -92,6 +106,7 @@ private:
 
   bool isRoland_ = false;
   bool isEmu_ = false;
+  bool isKurzweil_ = false;
 
   // Akai
   std::unique_ptr<akai2sfz::BlockDevice> device_;
@@ -107,4 +122,8 @@ private:
   std::unique_ptr<akai2sfz::BlockDevice> emuDevice_;
   std::unique_ptr<akai2sfz::EmuDisk> emuDisk_;
   std::string currentFolderName_;
+
+  // Kurzweil
+  std::unique_ptr<akai2sfz::BlockDevice> kurzweilDevice_;
+  std::unique_ptr<akai2sfz::KurzweilDisk> kurzweilDisk_;
 };
