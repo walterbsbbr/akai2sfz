@@ -1,6 +1,9 @@
 // akai2sfz CLI -- list/extract/convert sobre a camada de filesystem
-// Akai (S1000/S3000) e Roland (S-750/S-760/S-770).
+// Akai (S1000/S3000), Roland (S-750/S-760/S-770) e E-mu (EIII/ESI-32/EIV,
+// formato de bank EMU3 flat).
 #include "akai2sfz/converter.hpp"
+#include "akai2sfz/emu_converter.hpp"
+#include "akai2sfz/emu_filesystem.hpp"
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"
 #include "akai2sfz/roland_converter.hpp"
@@ -22,10 +25,12 @@ void print_usage(const char *argv0) {
       << "  " << argv0 << " extract <imagem> <VOLUME/ARQUIVO> <dir_saida> [-p particao]\n"
       << "  " << argv0 << " convert <imagem> <ALVO> <dir_saida> [-p particao]\n"
       << "\n"
-      << "O fabricante (Akai ou Roland) e detectado automaticamente pela imagem.\n"
+      << "O fabricante (Akai, Roland ou E-mu) e detectado automaticamente pela imagem.\n"
       << "  Akai:   <ALVO> = VOLUME/PROGRAM (aceita programs S1000 .a1p ou S3000 .a3p)\n"
       << "  Roland: <ALVO> = nome do Patch (ex.: \"KIK:Gretsch Kik5\"); 'extract' e "
-         "'-p' nao se aplicam a Roland ainda\n";
+         "'-p' nao se aplicam a Roland ainda\n"
+      << "  E-mu:   <ALVO> = PASTA/BANK/PRESET (ex.: \"Default Folder/Orbit bas 1/001 - "
+         "Membrace\"); 'extract' e '-p' nao se aplicam a E-mu ainda\n";
 }
 
 // --- Akai ---
@@ -205,6 +210,65 @@ int cmd_convert_roland(RolandDisk &disk, const std::string &patch_name,
   return 0;
 }
 
+// --- E-mu ---
+
+int cmd_list_emu(EmuDisk &disk) {
+  auto folders = disk.list_folders();
+  std::cout << folders.size() << " pasta(s):\n";
+
+  std::size_t total_banks = 0;
+  for (const auto &folder : folders) {
+    std::cout << "/" << folder.name << ":\n";
+    for (const auto &f : disk.list_files(folder)) {
+      std::cout << "  " << f.name << "\n";
+      ++total_banks;
+    }
+  }
+
+  std::cerr << "\ntotal: " << total_banks << " bank(s)\n";
+  return 0;
+}
+
+// Divide "PASTA/BANK/PRESET" em 3 partes (o nome do bank/preset nao pode
+// conter '/', mas o nome da pasta tambem nao costuma conter -- mesma
+// limitacao de split_vol_file do lado Akai).
+bool split_folder_bank_preset(const std::string &path, std::string &folder, std::string &bank,
+                               std::string &preset) {
+  std::string p = path;
+  if (!p.empty() && p.front() == '/') p.erase(p.begin());
+  auto slash1 = p.find('/');
+  if (slash1 == std::string::npos) return false;
+  auto slash2 = p.find('/', slash1 + 1);
+  if (slash2 == std::string::npos) return false;
+  folder = p.substr(0, slash1);
+  bank = p.substr(slash1 + 1, slash2 - slash1 - 1);
+  preset = p.substr(slash2 + 1);
+  return !folder.empty() && !bank.empty() && !preset.empty();
+}
+
+int cmd_convert_emu(EmuDisk &disk, const std::string &target, const std::string &out_dir) {
+  std::string folder, bank, preset;
+  if (!split_folder_bank_preset(target, folder, bank, preset)) {
+    std::cerr << "caminho invalido, esperado PASTA/BANK/PRESET: " << target << "\n";
+    return 1;
+  }
+
+  ConvertResult r = convert_emu_preset(disk, folder, bank, preset, out_dir);
+
+  for (const auto &w : r.warnings) {
+    std::cerr << "aviso: " << w << "\n";
+  }
+
+  if (!r.success) {
+    std::cerr << "erro: " << r.error << "\n";
+    return 1;
+  }
+
+  std::cerr << "SFZ: " << r.sfz_path << "\n";
+  std::cerr << "WAV: " << r.wav_paths.size() << " arquivo(s)\n";
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -227,10 +291,16 @@ int main(int argc, char **argv) {
 
   try {
     if (args[0] == "list" && args.size() >= 2) {
+      // Roland e E-mu usam o mesmo tamanho de bloco (512 B); um so
+      // BlockDevice serve pra testar os dois antes de cair pro Akai.
       BlockDevice rdev(args[1], roland_raw::kBlockSize);
       if (looks_like_roland(rdev)) {
         RolandDisk disk(rdev);
         return cmd_list_roland(disk);
+      }
+      if (looks_like_emu(rdev)) {
+        EmuDisk disk(rdev);
+        return cmd_list_emu(disk);
       }
       return cmd_list_akai(args[1], partition);
     }
@@ -242,6 +312,10 @@ int main(int argc, char **argv) {
       if (looks_like_roland(rdev)) {
         RolandDisk disk(rdev);
         return cmd_convert_roland(disk, args[2], args[3]);
+      }
+      if (looks_like_emu(rdev)) {
+        EmuDisk disk(rdev);
+        return cmd_convert_emu(disk, args[2], args[3]);
       }
       return cmd_convert_akai(args[1], args[2], args[3], partition);
     }

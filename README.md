@@ -1,7 +1,8 @@
 # akai2sfz
 
-Conversor nativo em C++ de imagens de CD/HD dos samplers **Akai S900/S1000/S3000**
-e **Roland S-750/S-760/S-770** para **SFZ** + WAV.
+Conversor nativo em C++ de imagens de CD/HD dos samplers **Akai S900/S1000/S3000**,
+**Roland S-750/S-760/S-770** e **E-mu Emulator III/IIIx/ESI-32/IV** (formato de bank
+"EMU3 flat") para **SFZ** + WAV.
 
 Este projeto começa como a camada de filesystem Akai (M0 do plano de arquitetura) e vai
 crescer em cima do trabalho já existente no diretório `AKAI/`/`ROLAND/` deste
@@ -71,6 +72,41 @@ importantes:
   a leitura literal da ordem do manual sugere -- confirmado porque o valor lido em
   `0x2A` batia exatamente com a nota do nome da própria amostra (`GTR:E3 Tap Hrm 1` →
   `original_key=52` = MIDI E3) numa imagem real.
+
+### E-mu Emulator III/IIIx/ESI-32/IV
+
+O container de disco (`include/akai2sfz/emu_raw_format.hpp`, superbloco/cadeia de
+clusters/diretório de 2 níveis) e o formato de bank "EMU3 flat"
+(`EMULATOR THREE`/`EMULATOR 3X`/`EMU SI-32 v3`) vêm de duas fontes de terceiros que
+concordam entre si:
+
+- **emu3fs** (C, driver de kernel Linux), de David García Goñi —
+  `../E-MU/emu3fs`. Documenta o container de disco comum a EIII/EIIIx/ESI-32/EIV:
+  superbloco de 4 bytes (`"EMU3"`) + 9 campos `u32`, cadeia de clusters de 16 bits
+  (estilo FAT, índices 1-based), diretório-raiz (pastas) + pool compartilhado de
+  blocos de conteúdo (arquivos), dentries de 32 bytes.
+- **emu3bm** (C), do mesmo autor — `../E-MU/emu3bm/src/emu3bm.c`. Documenta o
+  formato de bank binário com endereçamento absoluto: cabeçalho de 108 bytes, tabelas
+  de endereço de preset/sample (com a peculiaridade de que `EMULATOR THREE` usa
+  offsets relativos a um espaço de endereço maior — subtraindo uma constante fixa —
+  enquanto `EMULATOR 3X`/`EMU SI-32 v3` usam offsets diretos), preset de 142 bytes,
+  zona de 48 bytes, sample de 92 bytes de cabeçalho + PCM 16-bit por canal (canal
+  esquerdo inteiro seguido do direito inteiro, **não** intercalado como WAV).
+
+Todos os offsets acima foram revalidados campo a campo contra bancos reais extraídos
+de `orbit.iso` (Emulator III, "Emu Orbit — The Dance Planet") e de
+`Vol. 1 – Emulator Standards.iso`: a cadeia completa bank → preset → note_zone → zone
+→ sample bate (nomes ASCII fazem sentido em cada nível, `sample_rate` plausível,
+`original_key` progride monotonicamente ao longo de presets multi-sample como um
+piano de 88 teclas). Um achado importante, só descoberto ao testar contra um bank
+real com múltiplos samples (não um bank vazio, que mascara o problema):
+
+- Os campos `blocks`/`bytes_in_last_block` da entrada de diretório do **filesystem**
+  (não do bank) descrevem o tamanho válido só do **último cluster** da cadeia, não do
+  arquivo inteiro — a hipótese inicial (mais simples) de que descreviam o arquivo
+  inteiro só não quebrava num bank vazio de 1 cluster (caso degenerado onde as duas
+  interpretações coincidem); um bank real de vários samples truncava e derrubava a
+  leitura do 2º sample em diante até a correção.
 
 Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
 
@@ -191,6 +227,39 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
       pseudo-item se não houver); Programs lista os Patches diretamente,
       expansível para ver tecla → Partial → Sample.
 
+### EM0-EM2 -- suporte E-mu Emulator III/IIIx/ESI-32/IV
+- [x] Filesystem E-mu (`emu_filesystem.hpp/cpp`): superbloco (`EMU3`, offsets
+      `0x00`-`0x28`), cadeia de clusters de 16 bits, diretório-raiz (pastas) +
+      pool de blocos de conteúdo (arquivos). Ao contrário do Roland, uma
+      imagem E-mu PODE ter várias pastas de topo -- viram os "Volumes" reais
+      da GUI. Validado contra 2 CDs reais (`orbit.iso` e
+      `Vol. 1 – Emulator Standards.iso`): superbloco, listagem de pastas e
+      extração de arquivo conferidos byte a byte via uma ferramenta de sonda
+      (`tests/emu_probe.cpp`, não faz parte do ctest).
+- [x] Parser de conteúdo "EMU3 flat" (`emu_format.hpp/cpp`): bank → preset →
+      note_zone → zone → sample, com as três variantes de endereçamento
+      (`EMULATOR THREE`/`EMULATOR 3X`/`EMU SI-32 v3`) espelhando
+      `emu3bm.c` linha por linha. Cadeia completa validada contra bancos reais
+      de dois discos bem diferentes: um synth (`Orbit bas 1`, 20 presets/20
+      samples estéreo) e um piano multi-sample real (`9ft Grand 88 Raw`, 46
+      zonas cobrindo as 88 teclas, `original_key` progredindo corretamente).
+- [x] Conversão (`emu_converter.cpp`): reaproveita `SfzRegion`/`write_sfz`/
+      `write_wav_mono16` sem modificação -- mesma generalização que já valeu a
+      pena para Roland. Amostras estéreo (comuns em bancos E-mu, ao contrário
+      de Akai/Roland) viram 2 arquivos WAV mono (`_L`/`_R`) com pan hard
+      -100/+100, já que o formato guarda os dois canais como blocos contíguos
+      dentro do mesmo objeto sample (não intercalados).
+- [x] CLI: `list`/`convert` detectam E-mu automaticamente (mesmo bloco de 512
+      bytes do Roland, assinatura diferente). `<ALVO>` para E-mu é
+      `PASTA/BANK/PRESET` (3 níveis, já que um bank agrupa vários presets).
+      `extract` ainda é só Akai.
+- [x] GUI: mesmas 3 colunas, mas com um nível a mais na coluna Programs --
+      Partições vira um único pseudo-item "Disco E-mu"; Volumes lista as
+      pastas reais (esse conceito existe de verdade aqui, ao contrário do
+      Roland); Programs lista os Banks (carregados sem parsing, só a
+      listagem do filesystem), expansíveis sob demanda para mostrar os
+      Presets -- e é o Preset (filho), não o Bank, que é convertível.
+
 ### Riscos conhecidos / não totalmente validados
 - A codificação de afinação do S1000 (cents/semitons como bytes separados,
   `decode_s1000_tune` em `akai_format.cpp`) segue a descrição literal do doc
@@ -237,6 +306,37 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
 - **Roland -- `loop_mode=Alternate` (ping-pong) e `Reverse`** são mapeados
   para `loop_continuous` do SFZ por falta de equivalente nativo -- perde a
   direção alternada/reversa do loop original.
+- **E-mu -- camadas pri/sec tratadas como sobrepostas, não crossfade por
+  velocidade**: cada preset tem 2 "camadas" (pri/sec) com faixas de
+  velocidade próprias (`vel_pri_low/high`, `vel_sec_low/high`) para permitir
+  crossfade, mas em nenhum preset com uma camada secundária real testado (em
+  2 discos, incluindo pianos multi-camada) esses campos mostraram uma divisão
+  coerente (tipicamente `[0,0]`/`[0,255]`, ou valores irregulares nos poucos
+  casos com `sec_zone` de fato ativo) -- diferente do `pitch_keycenter`/loop
+  points, validados byte a byte. Até confirmar contra áudio real, as duas
+  camadas são emitidas com faixa de velocidade completa (0-127, sobrepostas)
+  em vez de crossfade -- mais seguro que arriscar silenciar uma camada com um
+  corte de velocidade errado, mas não é o comportamento original do hardware.
+- **E-mu -- volume e filtro não mapeados**: `vca_level`, `vcf_cutoff` e os
+  envelopes (`vca_envelope`/`vcf_envelope`/`aux_envelope`) são parseados mas
+  não convertidos para SFZ ainda -- só `pitch_keycenter`, faixa de
+  tecla/velocidade, `tune` (fórmula exata `v*1.5625` cents, do próprio
+  `emu3bm.c`), `pan` (escala linear -64..63 → -100..100, não calibrada contra
+  áudio) e loop (ligado/desligado + pontos, sempre como `loop_continuous` --
+  o formato não expôs uma distinção sustain/continuous nos bits que foram
+  decodificados) chegam no `.sfz` gerado.
+- **E-mu -- EMAX/EMAX II fora de escopo**: nenhum dos dois formatos (disco ou
+  bank) é coberto por `emu3fs`/`emu3bm` nem por este projeto -- precisaria de
+  reverse engineering a partir do zero contra uma imagem de CD real do EMAX,
+  que não está disponível no repositório de amostras usado até agora.
+- **E-mu -- Emulator IV em formato encadeado (E4B0/EOS) e Emulator X
+  (E5B0/EBL) não implementados**: este projeto cobre só o formato de bank
+  "flat" clássico (que EIII/ESI-32 usam sempre, e que EIV também sabe ler).
+  Bancos EIV/EOS mais recentes e Emulator X usam containers encadeados
+  completamente diferentes (chunks `FORM`/`E4B0`/`E4P1`/`E3S1` e
+  `FORM`/`E5B0`/`TOC2`/`E5P1`/`E5S1` respectivamente) -- fora de escopo desta
+  fase; ficaria para um marco futuro dedicado (ver planejamento da sessão que
+  adicionou o suporte a E-mu).
 
 Plano completo de arquitetura e auditoria dos 6 repositórios Akai: ver o artefato da
 sessão que criou este projeto (2026-07-22). Plano de integração Roland: ver o artefato
@@ -268,7 +368,7 @@ assinado ad-hoc) e `build/apps/gui/akai2sfz_gui.dmg` ao lado.
 ### CLI
 
 Aceita `.iso`, `.cue`, `.bin` (com ou sem `.cue` ao lado), `.nrg` e `.mdf`. O
-fabricante (Akai ou Roland) é detectado automaticamente pela imagem.
+fabricante (Akai, Roland ou E-mu) é detectado automaticamente pela imagem.
 
 ```sh
 # Akai -- <ALVO> = VOLUME/PROGRAM
@@ -279,6 +379,10 @@ fabricante (Akai ou Roland) é detectado automaticamente pela imagem.
 # Roland -- <ALVO> = nome do Patch (sem prefixo de volume, busca e global)
 ./build/akai2sfz list caminho/para/imagem_roland.iso
 ./build/akai2sfz convert caminho/para/imagem_roland.iso "KIK:Gretsch Kik5" ./saida
+
+# E-mu -- <ALVO> = PASTA/BANK/PRESET
+./build/akai2sfz list caminho/para/imagem_emu.iso
+./build/akai2sfz convert caminho/para/imagem_emu.iso "Default Folder/Orbit bas 1/001 - Membrace" ./saida
 ```
 
 `extract` e a opção `-p` (partição) ainda são só para Akai.
@@ -291,7 +395,9 @@ fabricante (Akai ou Roland) é detectado automaticamente pela imagem.
 open build/apps/gui/akai2sfz_gui.app
 ```
 
-Abra uma imagem (Akai ou Roland, qualquer formato de container suportado),
-navegue Partições → Volumes → Programs, clique num program/patch para
-expandir e ver os samples referenciados, escolha o diretório de saída e
-converta.
+Abra uma imagem (Akai, Roland ou E-mu, qualquer formato de container
+suportado), navegue Partições → Volumes → Programs. Para Akai/Roland, clique
+num program/patch para expandir e ver os samples referenciados, e converta o
+próprio item. Para E-mu, expanda um Bank para ver os Presets dentro dele --
+é o Preset que se seleciona e converte, não o Bank. Escolha o diretório de
+saída e converta.

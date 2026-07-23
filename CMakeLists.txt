@@ -26,6 +26,9 @@ add_library(akai2sfz_core
     src/roland_filesystem.cpp
     src/roland_format.cpp
     src/roland_converter.cpp
+    src/emu_filesystem.cpp
+    src/emu_format.cpp
+    src/emu_converter.cpp
 )
 target_include_directories(akai2sfz_core PUBLIC include)
 target_include_directories(akai2sfz_core PRIVATE ${SNDFILE_INCLUDE_DIRS})

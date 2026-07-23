@@ -14,7 +14,16 @@
 // scoping implementado -- ver README, e Programs lista os Patches
 // diretamente (sem filtrar por volume ainda). O fabricante e detectado
 // automaticamente ao carregar a imagem.
+//
+// E-mu (EIII/ESI-32/EIV, bank EMU3 flat) tambem usa as MESMAS 3 colunas:
+// Particoes vira um unico pseudo-item "Disco E-mu"; Volumes lista as pastas
+// reais do disco (esse conceito existe de verdade no E-mu, ao contrario do
+// Roland); Programs lista os BANKS da pasta selecionada -- cada bank e
+// expansivel pra mostrar seus Presets (carregados sob demanda). Diferente
+// de Akai/Roland, quem e convertivel em E-mu e o Preset (filho), nao o
+// Bank (item de topo), porque um bank agrupa varios presets.
 
+#include "akai2sfz/emu_filesystem.hpp"
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"
 #include "akai2sfz/roland_filesystem.hpp"
@@ -62,6 +71,11 @@ private:
   void loadPatchPartialsRoland(QTreeWidgetItem *patchItem);
   void convertSelectedRoland(QTreeWidgetItem *patchItem, const QString &outDir);
 
+  // Idem para E-mu (isEmu_ == true).
+  void rebuildProgramTreeEmu();
+  void loadBankPresetsEmu(QTreeWidgetItem *bankItem);
+  void convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &outDir);
+
   QLineEdit *imagePathEdit_ = nullptr;
   QPushButton *browseBtn_ = nullptr;
   QPushButton *loadBtn_ = nullptr;
@@ -77,6 +91,7 @@ private:
   QLabel *statusLabel_ = nullptr;
 
   bool isRoland_ = false;
+  bool isEmu_ = false;
 
   // Akai
   std::unique_ptr<akai2sfz::BlockDevice> device_;
@@ -87,4 +102,9 @@ private:
   // Roland
   std::unique_ptr<akai2sfz::BlockDevice> rolandDevice_;
   std::unique_ptr<akai2sfz::RolandDisk> rolandDisk_;
+
+  // E-mu
+  std::unique_ptr<akai2sfz::BlockDevice> emuDevice_;
+  std::unique_ptr<akai2sfz::EmuDisk> emuDisk_;
+  std::string currentFolderName_;
 };

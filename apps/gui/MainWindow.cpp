@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 #include "akai2sfz/akai_format.hpp"
 #include "akai2sfz/converter.hpp"
+#include "akai2sfz/emu_converter.hpp"
+#include "akai2sfz/emu_format.hpp"
 #include "akai2sfz/roland_converter.hpp"
 #include "akai2sfz/roland_format.hpp"
 
@@ -65,14 +67,16 @@ QString midiNoteName(int note) {
 // Papeis customizados nos itens de lista/arvore, para recuperar dados ao converter.
 constexpr int kRolePartitionIndex = Qt::UserRole;
 constexpr int kRoleVolumeIndex = Qt::UserRole;
-constexpr int kRoleFileName = Qt::UserRole; // Akai: nome do arquivo; Roland: nome do patch
+constexpr int kRoleFileName = Qt::UserRole; // Akai: nome do arquivo; Roland: nome do patch; E-mu: nome do bank
 constexpr int kRoleExt = Qt::UserRole + 1;
 constexpr int kRolePlaceholder = Qt::UserRole + 2;
+constexpr int kRoleFolderName = Qt::UserRole; // E-mu: nome da pasta (item da coluna Volumes)
+constexpr int kRolePresetName = Qt::UserRole + 3; // E-mu: nome do preset (item filho de um bank)
 
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-  setWindowTitle("akai2sfz -- leitor de CD Akai/Roland e conversor para SFZ");
+  setWindowTitle("akai2sfz -- leitor de CD Akai/Roland/E-mu e conversor para SFZ");
 
   auto *central = new QWidget(this);
   auto *mainLayout = new QVBoxLayout(central);
@@ -161,8 +165,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &MainWindow::onProgramCurrentItemChanged);
   connect(programTree_, &QTreeWidget::itemExpanded, this, &MainWindow::onProgramItemExpanded);
 
-  log("akai2sfz iniciado. Abra uma imagem de CD Akai (S1000/S3000) ou Roland (S-750/760/770) "
-      "para comecar -- o fabricante e detectado automaticamente.");
+  log("akai2sfz iniciado. Abra uma imagem de CD Akai (S1000/S3000), Roland (S-750/760/770) ou "
+      "E-mu (EIII/ESI-32/EIV) para comecar -- o fabricante e detectado automaticamente.");
 }
 
 void MainWindow::log(const QString &line) {
@@ -187,28 +191,42 @@ void MainWindow::onLoadImage() {
   device_.reset();
   rolandDisk_.reset();
   rolandDevice_.reset();
+  emuDisk_.reset();
+  emuDevice_.reset();
   convertBtn_->setEnabled(false);
 
   std::string path = imagePathEdit_->text().toStdString();
 
-  // Tenta Roland primeiro (deteccao rapida: assinatura no bloco 0 com
-  // block_size=512). Se nao bater, tenta Akai.
+  // Tenta Roland e E-mu primeiro (deteccao rapida: os dois usam
+  // block_size=512, cada um com sua propria assinatura no bloco 0 -- um so
+  // BlockDevice serve pra testar ambos). Se nenhum bater, tenta Akai.
   try {
     auto rdev = std::make_unique<BlockDevice>(path, roland_raw::kBlockSize);
     if (looks_like_roland(*rdev)) {
       rolandDevice_ = std::move(rdev);
       rolandDisk_ = std::make_unique<RolandDisk>(*rolandDevice_);
       isRoland_ = true;
+      isEmu_ = false;
       log(QString("Disco Roland detectado: '%1'.")
               .arg(QString::fromStdString(rolandDisk_->drive_name())));
       rebuildPartitionList();
       return;
     }
+    if (looks_like_emu(*rdev)) {
+      emuDevice_ = std::move(rdev);
+      emuDisk_ = std::make_unique<EmuDisk>(*emuDevice_);
+      isRoland_ = false;
+      isEmu_ = true;
+      log("Disco E-mu detectado (EIII/ESI-32/EIV, container EMU3).");
+      rebuildPartitionList();
+      return;
+    }
   } catch (const std::exception &) {
-    // nao e Roland (ou erro ao abrir) -- cai para Akai abaixo
+    // nao e Roland nem E-mu (ou erro ao abrir) -- cai para Akai abaixo
   }
 
   isRoland_ = false;
+  isEmu_ = false;
   try {
     device_ = open_cd_image(path);
     partitions_ = scan_partitions(*device_);
@@ -221,7 +239,7 @@ void MainWindow::onLoadImage() {
   if (partitions_.empty()) {
     QMessageBox::warning(this, "Nenhuma particao",
                           "Nenhuma particao Akai valida foi encontrada nesta imagem, e ela nao "
-                          "tem a assinatura de um disco Roland.");
+                          "tem a assinatura de um disco Roland nem de um disco E-mu.");
     statusLabel_->setText("Nenhuma particao valida encontrada.");
     return;
   }
@@ -237,6 +255,14 @@ void MainWindow::rebuildPartitionList() {
     // Roland nao tem conceito de multiplas particoes -- um unico pseudo-item.
     auto *item = new QListWidgetItem(
         QString("Disco Roland  (%1 blocos)").arg(rolandDisk_->capacity_blocks()), partitionList_);
+    item->setData(kRolePartitionIndex, static_cast<qulonglong>(0));
+    partitionList_->setCurrentRow(0); // dispara onPartitionSelectionChanged
+    return;
+  }
+
+  if (isEmu_) {
+    // E-mu tambem nao tem conceito de multiplas particoes -- um unico pseudo-item.
+    auto *item = new QListWidgetItem("Disco E-mu", partitionList_);
     item->setData(kRolePartitionIndex, static_cast<qulonglong>(0));
     partitionList_->setCurrentRow(0); // dispara onPartitionSelectionChanged
     return;
@@ -258,7 +284,7 @@ void MainWindow::onPartitionSelectionChanged() {
   programTree_->clear();
   convertBtn_->setEnabled(false);
 
-  if (isRoland_) {
+  if (isRoland_ || isEmu_) {
     rebuildVolumeList();
     return;
   }
@@ -299,6 +325,21 @@ void MainWindow::rebuildVolumeList() {
     return;
   }
 
+  if (isEmu_) {
+    if (!emuDisk_) return;
+    for (const auto &folder : emuDisk_->list_folders()) {
+      QString name = QString::fromStdString(folder.name);
+      auto *item = new QListWidgetItem(name, volumeList_);
+      item->setData(kRoleFolderName, name);
+    }
+    if (volumeList_->count() > 0) {
+      volumeList_->setCurrentRow(0);
+    } else {
+      statusLabel_->setText("Disco E-mu sem pastas ativas.");
+    }
+    return;
+  }
+
   if (!partition_) return;
   for (std::size_t vi = 0; vi < partition_->volume_count(); ++vi) {
     raw::VolType vtype = partition_->volume_type(vi);
@@ -322,6 +363,14 @@ void MainWindow::onVolumeSelectionChanged() {
 
   if (isRoland_) {
     rebuildProgramTreeRoland();
+    return;
+  }
+
+  if (isEmu_) {
+    auto *item = volumeList_->currentItem();
+    if (!item) return;
+    currentFolderName_ = item->data(kRoleFolderName).toString().toStdString();
+    rebuildProgramTreeEmu();
     return;
   }
 
@@ -351,6 +400,29 @@ void MainWindow::rebuildProgramTreeRoland() {
       QString("%1 patch(es) (todos os patches do disco -- volume-scoping ainda nao "
               "implementado, ver README).")
           .arg(patches.size()));
+}
+
+void MainWindow::rebuildProgramTreeEmu() {
+  programTree_->clear();
+  if (!emuDisk_) return;
+
+  for (const auto &folder : emuDisk_->list_folders()) {
+    if (folder.name != currentFolderName_) continue;
+
+    auto files = emuDisk_->list_files(folder);
+    for (const auto &f : files) {
+      QString name = QString::fromStdString(f.name);
+      auto *item = new QTreeWidgetItem(programTree_, {name});
+      item->setData(0, kRoleFileName, name);
+      // filho placeholder so para mostrar a seta de expandir; substituido
+      // pelos presets reais em onProgramItemExpanded.
+      auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
+      placeholder->setData(0, kRolePlaceholder, true);
+    }
+
+    statusLabel_->setText(QString("%1 bank(s) nesta pasta.").arg(files.size()));
+    return;
+  }
 }
 
 void MainWindow::rebuildProgramTree() {
@@ -397,6 +469,8 @@ void MainWindow::onProgramItemExpanded(QTreeWidgetItem *item) {
 
   if (isRoland_) {
     loadPatchPartialsRoland(item);
+  } else if (isEmu_) {
+    loadBankPresetsEmu(item);
   } else {
     loadProgramSamples(item);
   }
@@ -467,6 +541,63 @@ void MainWindow::loadPatchPartialsRoland(QTreeWidgetItem *patchItem) {
   }
 }
 
+void MainWindow::loadBankPresetsEmu(QTreeWidgetItem *bankItem) {
+  if (!emuDisk_) return;
+
+  std::string bankName = bankItem->data(0, kRoleFileName).toString().toStdString();
+
+  try {
+    EmuFolder folder;
+    bool foundFolder = false;
+    for (auto &f : emuDisk_->list_folders()) {
+      if (f.name == currentFolderName_) {
+        folder = std::move(f);
+        foundFolder = true;
+        break;
+      }
+    }
+    if (!foundFolder) {
+      new QTreeWidgetItem(bankItem, {"(pasta nao encontrada)"});
+      return;
+    }
+
+    EmuFileEntry bankEntry;
+    bool foundBank = false;
+    for (auto &f : emuDisk_->list_files(folder)) {
+      if (f.name == bankName) {
+        bankEntry = std::move(f);
+        foundBank = true;
+        break;
+      }
+    }
+    if (!foundBank) {
+      new QTreeWidgetItem(bankItem, {"(bank nao encontrado)"});
+      return;
+    }
+
+    auto bankBytes = emuDisk_->read_file(bankEntry);
+    emu_raw::BankFormat format = detect_emu_bank_format(bankBytes);
+    if (format == emu_raw::BankFormat::Unknown) {
+      new QTreeWidgetItem(bankItem, {"(formato de bank desconhecido)"});
+      return;
+    }
+
+    int npresets = emu_bank_preset_count(bankBytes, format);
+    for (int pi = 0; pi < npresets; ++pi) {
+      EmuPreset p = parse_emu_preset(bankBytes, format, pi);
+      QString name = QString::fromStdString(p.name);
+      auto *item = new QTreeWidgetItem(bankItem, {name});
+      item->setData(0, kRolePresetName, name);
+    }
+
+    if (npresets == 0) {
+      new QTreeWidgetItem(bankItem, {"(sem presets)"});
+    }
+  } catch (const std::exception &e) {
+    new QTreeWidgetItem(bankItem, {QString("(erro ao ler bank: %1)").arg(e.what())});
+  }
+}
+
 void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
   if (!partition_) return;
 
@@ -521,8 +652,20 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
 }
 
 void MainWindow::onProgramCurrentItemChanged(QTreeWidgetItem *current, QTreeWidgetItem *) {
-  if (!current || current->parent() != nullptr) {
-    // nada selecionado, ou selecionado e um sample/tecla (filho) -- nao convertivel diretamente
+  if (!current) {
+    convertBtn_->setEnabled(false);
+    return;
+  }
+  if (isEmu_) {
+    // Ao contrario de Akai/Roland, quem e convertivel em E-mu e o Preset
+    // (filho de um Bank), nao o item de topo -- um bank agrupa varios
+    // presets, entao ele proprio nao e uma unidade convertivel.
+    convertBtn_->setEnabled(current->parent() != nullptr
+                             && current->data(0, kRolePresetName).isValid());
+    return;
+  }
+  if (current->parent() != nullptr) {
+    // sample/tecla (filho) em modo Akai/Roland -- nao convertivel diretamente
     convertBtn_->setEnabled(false);
     return;
   }
@@ -570,9 +713,45 @@ void MainWindow::convertSelectedRoland(QTreeWidgetItem *patchItem, const QString
           .arg(result.wav_paths.size()));
 }
 
+void MainWindow::convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &outDir) {
+  QTreeWidgetItem *bankItem = presetItem->parent();
+  if (!bankItem) return;
+
+  QString bankName = bankItem->data(0, kRoleFileName).toString();
+  QString presetName = presetItem->data(0, kRolePresetName).toString();
+  QString folderName = QString::fromStdString(currentFolderName_);
+
+  log(QString("Convertendo %1/%2/%3...").arg(folderName, bankName, presetName));
+  statusLabel_->setText("Convertendo...");
+
+  ConvertResult result = convert_emu_preset(*emuDisk_, currentFolderName_, bankName.toStdString(),
+                                             presetName.toStdString(), outDir.toStdString());
+
+  for (const auto &w : result.warnings) {
+    log("aviso: " + QString::fromStdString(w));
+  }
+
+  if (!result.success) {
+    log("erro: " + QString::fromStdString(result.error));
+    QMessageBox::critical(this, "Conversao falhou", QString::fromStdString(result.error));
+    statusLabel_->setText("Conversao falhou.");
+    return;
+  }
+
+  log(QString("OK: %1 (%2 WAV)")
+          .arg(QString::fromStdString(result.sfz_path))
+          .arg(result.wav_paths.size()));
+  statusLabel_->setText("Conversao concluida.");
+  QMessageBox::information(
+      this, "Conversao concluida",
+      QString("SFZ: %1\nArquivos WAV: %2")
+          .arg(QString::fromStdString(result.sfz_path))
+          .arg(result.wav_paths.size()));
+}
+
 void MainWindow::onConvertSelected() {
   QTreeWidgetItem *progItem = programTree_->currentItem();
-  if (!progItem || progItem->parent() != nullptr) return;
+  if (!progItem) return;
 
   QString outDir = outputDirEdit_->text();
   if (outDir.isEmpty()) {
@@ -580,6 +759,14 @@ void MainWindow::onConvertSelected() {
                           "Escolha um diretorio de saida antes de converter.");
     return;
   }
+
+  if (isEmu_) {
+    if (!emuDisk_ || progItem->parent() == nullptr) return;
+    convertSelectedEmu(progItem, outDir);
+    return;
+  }
+
+  if (progItem->parent() != nullptr) return;
 
   if (isRoland_) {
     if (!rolandDisk_) return;
