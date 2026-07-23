@@ -64,19 +64,48 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
 - [x] Parser de program S3000 (`.a3p`): 1 keygroup = 192 bytes, até 4 zonas de
       velocidade por keygroup (offsets `0x22`/`0x3A`/`0x52`/`0x6A`) -- cobre o
       caso comum de par estéreo L/R (2 zonas, mesma faixa de velocidade).
-- [x] WAV via libsndfile, SFZ com region por zona (lokey/hikey, pitch_keycenter
-      a partir da tecla raiz do *sample*, velocity, tune combinado, pan, loop).
-- [x] CLI: `list` / `extract` / `convert`.
-- [x] GUI Qt6: `list`/`extract`/`convert` num browser de 3 colunas (Partições →
-      Volumes → Programs, expansível para ver os samples referenciados).
+- [x] WAV via libsndfile, SFZ com region por zona.
+
+### M3 -- conteúdo S1000 + SFZ
+- [x] Parser de sample S1000 (`.a1s`, header de 150 bytes): mesmos offsets do
+      S3000 para tudo que os dois formatos compartilham (`key@0x02`,
+      `name@0x03`, loop em `0x26`/`0x2C`/`0x13`) -- só a afinação muda (dois
+      bytes signed separados -- cents e semitons -- em vez do fixed-point de
+      16 bits do S3000).
+- [x] Parser de program S1000 (`.a1p`): mesmo layout de keygroup/zona do
+      S3000 (`low_key@0x03`, zonas em `0x22`/`0x3A`/`0x52`/`0x6A`), mais o
+      campo explícito "vel zones used" (`0x1F`) em vez de inferir pelo nome
+      vazio.
+- [x] **"Key tracking" por zona** (`0x84+zona`, doc Kellett): quando `FIXED`,
+      a amostra deve soar sempre na mesma altura, então `pitch_keycenter` usa
+      a tecla do keygroup em vez da tecla raiz do sample -- sem isso, kits de
+      bateria tocavam ~2 oitavas abaixo do esperado (achado ao validar contra
+      `RMD2.iso`, um CD S1000 real já presente no diretório: kit de bateria
+      `DRYKIT01 A`, 4 zonas de velocidade por batida, todas fixed-pitch).
+- [x] `sfz_writer` generalizado (`SfzRegion`) para não depender de S1000 nem
+      S3000 -- o `converter.cpp` monta as regions a partir de qualquer um dos
+      dois parsers.
+- [x] CLI: `list` / `extract` / `convert` (detecta `.a3p` vs `.a1p` sozinho).
+- [x] GUI Qt6: browser de 3 colunas (Partições → Volumes → Programs,
+      expansível para ver os samples referenciados) -- S1000 e S3000 tratados
+      igualmente.
 
 ### Pendente
 - [ ] Containers MDF/NRG/BIN+CUE reais (hoje só imagem plana) — M1.
-- [ ] Reverse engineering de `.a1p`/`.a1s` (S1000) — M3. O layout completo já
-      está documentado (ver proveniência acima, doc Kellett seções 5-6) --
-      falta implementar e validar contra os CDs S1000 reais já disponíveis
-      (ex.: `RMD2.iso`).
 - [ ] Empacotamento (M5).
+
+### Riscos conhecidos / não totalmente validados
+- A codificação de afinação do S1000 (cents/semitons como bytes separados,
+  `decode_s1000_tune` em `akai_format.cpp`) segue a descrição literal do doc
+  Kellett, mas não há uma segunda fonte para confirmar se há reescala
+  envolvida (o doc é inconsistente entre seções sobre se o byte de "cents"
+  vai de -50..50 diretamente ou de -128..127 mapeado nesse intervalo).
+- O campo `pitch` do keygroup S3000 (offset `0x84`, usado para `transpose`)
+  vem do protótipo Python original e nunca foi confirmado contra uma fonte
+  independente -- nos testes reais ele aparece constante (`transpose=-59`
+  em todos os keygroups de um mesmo program), o que sugere que pode não ser
+  o que o nome indica. S1000 não tem um campo equivalente documentado, por
+  isso `transpose` fica sempre 0 nesse formato.
 
 Plano completo de arquitetura e auditoria dos 6 repositórios: ver o artefato gerado
 na sessão que criou este projeto (auditoria de 2026-07-22).

@@ -5,8 +5,8 @@
 //
 // Navegacao em 3 colunas (estilo column browser): Particoes -> Volumes ->
 // Programs. Cada program na 3a coluna e expansivel: ao abrir, mostra (sob
-// demanda) os samples que ele referencia. So programs S3000 tem parser de
-// conteudo por enquanto, entao so eles podem ser expandidos/convertidos.
+// demanda) os samples que ele referencia. S1000 (.a1p) e S3000 (.a3p) sao
+// convertiveis e expansiveis igualmente.
 
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"

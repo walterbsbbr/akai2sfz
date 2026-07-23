@@ -154,8 +154,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   connect(programTree_, &QTreeWidget::itemExpanded, this, &MainWindow::onProgramItemExpanded);
 
   log("akai2sfz iniciado. Abra uma imagem ISO de um CD Akai S1000/S3000 para comecar.");
-  log("Nota: apenas programs S3000 (.a3p) podem ser convertidos/expandidos por enquanto -- "
-      "S1000 ainda nao tem parser de conteudo (ver README).");
 }
 
 void MainWindow::log(const QString &line) {
@@ -285,7 +283,7 @@ void MainWindow::rebuildProgramTree() {
     item->setData(0, kRoleFileName, fname);
     item->setData(0, kRoleExt, ext);
 
-    if (ext == "a3p") {
+    if (ext == "a3p" || ext == "a1p") {
       // filho placeholder so para mostrar a seta de expandir; substituido
       // por samples reais em onProgramItemExpanded (carregamento sob demanda).
       auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
@@ -313,20 +311,32 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
   if (!partition_) return;
 
   std::string programName = programItem->data(0, kRoleFileName).toString().toStdString();
+  QString ext = programItem->data(0, kRoleExt).toString();
   auto files = list_files(*partition_, currentVolumeIndex_);
-  const FileEntry *progEntry = findFile(files, programName, "a3p");
+  const FileEntry *progEntry = findFile(files, programName, ext.toStdString());
   if (!progEntry) {
     new QTreeWidgetItem(programItem, {"(program nao encontrado)"});
     return;
   }
 
   try {
-    auto bytes = extract_file(*partition_, *progEntry);
-    S3000Program program = parse_s3000_program(bytes);
-
     std::set<std::string> uniqueSamples;
-    for (const auto &kg : program.keygroups) {
-      for (const auto &zone : kg.zones) uniqueSamples.insert(zone.sample_name);
+    std::string sampleExt;
+
+    if (ext == "a3p") {
+      auto bytes = extract_file(*partition_, *progEntry);
+      S3000Program program = parse_s3000_program(bytes);
+      for (const auto &kg : program.keygroups) {
+        for (const auto &zone : kg.zones) uniqueSamples.insert(zone.sample_name);
+      }
+      sampleExt = "a3s";
+    } else { // a1p
+      auto bytes = extract_file(*partition_, *progEntry);
+      S1000Program program = parse_s1000_program(bytes);
+      for (const auto &kg : program.keygroups) {
+        for (const auto &zone : kg.zones) uniqueSamples.insert(zone.sample_name);
+      }
+      sampleExt = "a1s";
     }
 
     if (uniqueSamples.empty()) {
@@ -335,12 +345,14 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
     }
 
     for (const auto &sname : uniqueSamples) {
-      const FileEntry *sampleEntry = findFile(files, sname, "a3s");
+      const FileEntry *sampleEntry = findFile(files, sname, sampleExt);
+      QString sampleExtQ = QString::fromStdString(sampleExt);
       QString label = sampleEntry
-                           ? QString("%1.a3s  [S3000 SAMPLE, %2]")
-                                 .arg(QString::fromStdString(sname), formatSize(sampleEntry->size))
-                           : QString("%1.a3s  [nao encontrado no volume]")
-                                 .arg(QString::fromStdString(sname));
+                           ? QString("%1.%2  [%3]")
+                                 .arg(QString::fromStdString(sname), sampleExtQ,
+                                      formatSize(sampleEntry->size))
+                           : QString("%1.%2  [nao encontrado no volume]")
+                                 .arg(QString::fromStdString(sname), sampleExtQ);
       new QTreeWidgetItem(programItem, {label});
     }
   } catch (const std::exception &e) {
@@ -355,10 +367,7 @@ void MainWindow::onProgramCurrentItemChanged(QTreeWidgetItem *current, QTreeWidg
     return;
   }
   QString ext = current->data(0, kRoleExt).toString();
-  convertBtn_->setEnabled(ext == "a3p");
-  if (ext == "a1p") {
-    statusLabel_->setText("Program S1000 selecionado -- conversao ainda nao implementada (M3).");
-  }
+  convertBtn_->setEnabled(ext == "a3p" || ext == "a1p");
 }
 
 void MainWindow::onBrowseOutputDir() {

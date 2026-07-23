@@ -22,7 +22,7 @@ struct ConvertResult {
 
 // Converte o program de nome `program_name` (sem extensao) dentro do volume
 // `volume_name` para SFZ + WAV em `output_dir` (criado se nao existir).
-// So suporta programs S3000 (.a3p) em M2 -- ver README para S1000.
+// Detecta automaticamente se e um program S3000 (.a3p) ou S1000 (.a1p).
 ConvertResult convert_program(const OpenPartition &part, const std::string &volume_name,
                                const std::string &program_name, const std::string &output_dir);
 

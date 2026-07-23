@@ -65,6 +65,55 @@ void mkdir_p(const std::string &path) {
   ::mkdir(path.c_str(), 0755); // ignora erro se ja existir
 }
 
+std::string loop_mode_to_sfz(AkaiLoopMode mode) {
+  switch (mode) {
+    // "in release" continua tocando o loop mesmo depois do note-off -- o
+    // mais proximo em SFZ e loop_continuous (nao ha equivalente exato).
+    case AkaiLoopMode::InRelease: return "loop_continuous";
+    // caso mais comum: loop enquanto a nota esta sustentada, para no release.
+    case AkaiLoopMode::UntilRelease: return "loop_sustain";
+    case AkaiLoopMode::None:
+    case AkaiLoopMode::PlayToEnd:
+    default: return "no_loop";
+  }
+}
+
+// Extrai e converte para WAV cada sample distinto referenciado pelo program,
+// devolvendo um mapa nome-do-sample -> (nome do arquivo wav, sample parseado).
+template <typename SampleT, typename ParseFn>
+std::map<std::string, std::pair<std::string, SampleT>> extract_and_convert_samples(
+    const OpenPartition &part, const std::vector<FileEntry> &files,
+    const std::set<std::string> &names, const std::string &ext, const std::string &output_dir,
+    ParseFn parse, std::vector<std::string> &wav_paths, std::vector<std::string> &warnings) {
+  std::map<std::string, std::pair<std::string, SampleT>> cache;
+  for (const auto &sname : names) {
+    const FileEntry *entry = find_file(files, sname, ext);
+    if (!entry) {
+      warnings.push_back("sample nao encontrado: " + sname);
+      continue;
+    }
+    auto bytes = extract_file(part, *entry);
+    SampleT sample = parse(bytes);
+
+    std::string wav_name = sanitize_filename(sample.name) + ".wav";
+    std::string wav_path = output_dir + "/" + wav_name;
+    write_wav_mono16(wav_path, sample.pcm, sample.rate);
+    wav_paths.push_back(wav_path);
+
+    cache.emplace(sname, std::make_pair(wav_name, std::move(sample)));
+  }
+  return cache;
+}
+
+template <typename SampleT>
+void apply_loop(SfzRegion &r, const SampleT &sample) {
+  if (sample.has_loop() && sample.loop_len > 0) {
+    r.loop_mode = loop_mode_to_sfz(sample.loop_mode_raw);
+    r.loop_start_frame = sample.loop_start;
+    r.loop_end_frame = sample.loop_start + sample.loop_len;
+  }
+}
+
 } // namespace
 
 ConvertResult convert_program(const OpenPartition &part, const std::string &volume_name,
@@ -79,72 +128,131 @@ ConvertResult convert_program(const OpenPartition &part, const std::string &volu
   }
 
   auto files = list_files(part, vi);
-  const FileEntry *prog_entry = find_file(files, program_name, "a3p");
-  if (!prog_entry) {
-    result.error = "program S3000 nao encontrado: " + volume_name + "/" + program_name
-        + " (M2 so suporta .a3p; veja README para S1000)";
+
+  const FileEntry *s3000_entry = find_file(files, program_name, "a3p");
+  const FileEntry *s1000_entry = s3000_entry ? nullptr : find_file(files, program_name, "a1p");
+
+  if (!s3000_entry && !s1000_entry) {
+    result.error = "program nao encontrado: " + volume_name + "/" + program_name;
     return result;
   }
 
-  auto prog_bytes = extract_file(part, *prog_entry);
-  S3000Program program = parse_s3000_program(prog_bytes);
-
   mkdir_p(output_dir);
 
-  // extrai/converte cada sample referenciado uma unica vez, mesmo que varias
-  // zonas (de um ou mais keygroups) apontem para o mesmo nome
-  std::set<std::string> unique_samples;
-  for (const auto &kg : program.keygroups) {
-    for (const auto &zone : kg.zones) unique_samples.insert(zone.sample_name);
+  SfzProgramInfo info;
+  std::vector<SfzRegion> regions;
+
+  if (s3000_entry) {
+    auto prog_bytes = extract_file(part, *s3000_entry);
+    S3000Program program = parse_s3000_program(prog_bytes);
+
+    info.name = program.name;
+    info.format_label = "S3000";
+    info.midi_prog = program.midi_prog;
+    info.midi_chan = program.midi_chan;
+    info.low_key = program.low_key;
+    info.high_key = program.high_key;
+
+    std::set<std::string> unique_samples;
+    for (const auto &kg : program.keygroups) {
+      for (const auto &zone : kg.zones) unique_samples.insert(zone.sample_name);
+    }
+    auto sample_cache = extract_and_convert_samples<S3000Sample>(
+        part, files, unique_samples, "a3s", output_dir, parse_s3000_sample, result.wav_paths,
+        result.warnings);
+
+    for (std::size_t i = 0; i < program.keygroups.size(); ++i) {
+      const auto &kg = program.keygroups[i];
+      for (std::size_t z = 0; z < kg.zones.size(); ++z) {
+        const auto &zone = kg.zones[z];
+
+        SfzRegion r;
+        r.comment = "keygroup " + std::to_string(i + 1) + " zona " + std::to_string(z + 1) + ": "
+            + zone.sample_name;
+
+        auto it = sample_cache.find(zone.sample_name);
+        if (it == sample_cache.end()) {
+          regions.push_back(std::move(r)); // sample_wav_filename vazio -> pulado no writer
+          continue;
+        }
+        const auto &[wav_name, sample] = it->second;
+
+        r.sample_wav_filename = wav_name;
+        r.lokey = kg.low_key;
+        r.hikey = kg.high_key;
+        r.pitch_keycenter = sample.key;
+        r.lovel = zone.low_vel;
+        r.hivel = zone.high_vel;
+        r.tune_semitones = sample.tune + kg.tune;
+        r.transpose = static_cast<int>(kg.pitch) - 60;
+        r.volume_db = zone.vol_offset;
+        r.pan = static_cast<int>(zone.pan_offset) * 2; // -50..50 -> -100..100
+        apply_loop(r, sample);
+
+        regions.push_back(std::move(r));
+      }
+    }
+
+  } else {
+    auto prog_bytes = extract_file(part, *s1000_entry);
+    S1000Program program = parse_s1000_program(prog_bytes);
+
+    info.name = program.name;
+    info.format_label = "S1000";
+    info.midi_prog = program.midi_prog;
+    info.midi_chan = program.midi_chan;
+    info.low_key = program.low_key;
+    info.high_key = program.high_key;
+
+    std::set<std::string> unique_samples;
+    for (const auto &kg : program.keygroups) {
+      for (const auto &zone : kg.zones) unique_samples.insert(zone.sample_name);
+    }
+    auto sample_cache = extract_and_convert_samples<S1000Sample>(
+        part, files, unique_samples, "a1s", output_dir, parse_s1000_sample, result.wav_paths,
+        result.warnings);
+
+    for (std::size_t i = 0; i < program.keygroups.size(); ++i) {
+      const auto &kg = program.keygroups[i];
+      for (std::size_t z = 0; z < kg.zones.size(); ++z) {
+        const auto &zone = kg.zones[z];
+
+        SfzRegion r;
+        r.comment = "keygroup " + std::to_string(i + 1) + " zona " + std::to_string(z + 1) + ": "
+            + zone.sample_name;
+
+        auto it = sample_cache.find(zone.sample_name);
+        if (it == sample_cache.end()) {
+          regions.push_back(std::move(r));
+          continue;
+        }
+        const auto &[wav_name, sample] = it->second;
+
+        r.sample_wav_filename = wav_name;
+        r.lokey = kg.low_key;
+        r.hikey = kg.high_key;
+        // "key tracking" FIXED (comum em kits de bateria) significa que a
+        // amostra deve soar sempre na mesma altura -- ignora a tecla raiz
+        // do sample e usa a propria tecla do keygroup, derrotando qualquer
+        // transposicao pelo SFZ. Ver akai_format.hpp (S1000Zone::fixed_pitch).
+        r.pitch_keycenter = zone.fixed_pitch ? kg.low_key : sample.key;
+        r.lovel = zone.low_vel;
+        r.hivel = zone.high_vel;
+        r.tune_semitones = sample.tune + kg.tune;
+        // S1000 nao documenta um campo de transpose por keygroup equivalente
+        // ao "pitch" do S3000 -- fica 0.
+        r.transpose = 0;
+        r.volume_db = zone.loudness;
+        r.pan = static_cast<int>(zone.pan) * 2; // -50..50 -> -100..100
+        apply_loop(r, sample);
+
+        regions.push_back(std::move(r));
+      }
+    }
   }
 
-  SampleMetaMap sample_meta;
-  for (const auto &sname : unique_samples) {
-    const FileEntry *sample_entry = find_file(files, sname, "a3s");
-    if (!sample_entry) {
-      result.warnings.push_back("sample nao encontrado: " + sname);
-      continue;
-    }
-
-    auto sample_bytes = extract_file(part, *sample_entry);
-    S3000Sample sample = parse_s3000_sample(sample_bytes);
-
-    std::string wav_name = sanitize_filename(sample.name) + ".wav";
-    std::string wav_path = output_dir + "/" + wav_name;
-    write_wav_mono16(wav_path, sample.pcm, sample.rate);
-    result.wav_paths.push_back(wav_path);
-
-    SampleMeta meta;
-    meta.wav_filename = wav_name;
-    meta.root_key = sample.key;
-    meta.tune_semitones = sample.tune;
-    // loop_mode_raw e o byte explicito em 0x13 (doc Kellett), muito mais
-    // confiavel que a heuristica anterior baseada em loop_time_ms (0x30),
-    // que na verdade e um tempo em milissegundos, nao um modo/contador.
-    if (!sample.has_loop() || sample.loop_len == 0) {
-      meta.loop_mode = "no_loop";
-    } else if (sample.loop_mode_raw == S3000LoopMode::InRelease) {
-      // continua tocando o loop mesmo durante o release: o mais proximo em
-      // SFZ e loop_continuous (nao ha equivalente exato).
-      meta.loop_mode = "loop_continuous";
-    } else {
-      // UntilRelease (o caso mais comum): loop enquanto a nota esta
-      // sustentada, para no release -- exatamente o que loop_sustain faz.
-      meta.loop_mode = "loop_sustain";
-    }
-    if (meta.loop_mode != "no_loop") {
-      // loop_start/loop_len ja estao em words (frames), NAO em bytes --
-      // confirmado pelo doc Kellett ("Number of sample words" / "Start
-      // marker" / "Loop 1 coarse length (words)"). Nao dividir por 2 aqui.
-      meta.loop_start_frame = sample.loop_start;
-      meta.loop_end_frame = sample.loop_start + sample.loop_len;
-    }
-
-    sample_meta[sname] = meta;
-  }
-
-  std::string sfz_path = output_dir + "/" + sanitize_filename(program.name) + ".sfz";
-  write_sfz(program, sample_meta, sfz_path);
+  std::string sfz_path = output_dir + "/" + sanitize_filename(info.name) + ".sfz";
+  write_sfz(info, regions, sfz_path);
 
   result.success = true;
   result.sfz_path = sfz_path;

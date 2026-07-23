@@ -17,7 +17,7 @@ void print_usage(const char *argv0) {
             << "  " << argv0 << " list <imagem> [-p particao(1-based)]\n"
             << "  " << argv0 << " extract <imagem> <VOLUME/ARQUIVO> <dir_saida> [-p particao]\n"
             << "  " << argv0 << " convert <imagem> <VOLUME/PROGRAM> <dir_saida> [-p particao]\n"
-            << "                 (so S3000 .a3p por enquanto; S1000 ainda nao tem parser de conteudo)\n";
+            << "                 (aceita programs S1000 .a1p ou S3000 .a3p)\n";
 }
 
 std::string vol_type_label(raw::VolType t) {
