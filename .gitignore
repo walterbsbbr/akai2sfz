@@ -1,0 +1,10 @@
+build/
+*.o
+*.iso
+*.bin
+*.cue
+*.mdf
+*.nrg
+.idea/
+.vscode/
+compile_commands.json
