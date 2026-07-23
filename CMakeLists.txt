@@ -11,12 +11,22 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SNDFILE REQUIRED sndfile)
+
 add_library(akai2sfz_core
     src/codec.cpp
     src/image.cpp
     src/filesystem.cpp
+    src/akai_format.cpp
+    src/wav_writer.cpp
+    src/sfz_writer.cpp
+    src/converter.cpp
 )
 target_include_directories(akai2sfz_core PUBLIC include)
+target_include_directories(akai2sfz_core PRIVATE ${SNDFILE_INCLUDE_DIRS})
+target_link_libraries(akai2sfz_core PUBLIC ${SNDFILE_LIBRARIES})
+target_link_directories(akai2sfz_core PUBLIC ${SNDFILE_LIBRARY_DIRS})
 
 add_executable(akai2sfz
     apps/cli/main.cpp
@@ -25,3 +35,13 @@ target_link_libraries(akai2sfz PRIVATE akai2sfz_core)
 
 enable_testing()
 add_subdirectory(tests)
+
+option(AKAI2SFZ_BUILD_GUI "Build the Qt6 GUI app" ON)
+if(AKAI2SFZ_BUILD_GUI)
+  find_package(Qt6 COMPONENTS Widgets)
+  if(Qt6_FOUND)
+    add_subdirectory(apps/gui)
+  else()
+    message(WARNING "Qt6 nao encontrado -- pulando o build da GUI (akai2sfz_gui)")
+  endif()
+endif()

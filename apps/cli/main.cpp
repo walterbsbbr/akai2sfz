@@ -1,4 +1,5 @@
-// akai2sfz CLI -- M0: list/extract sobre a camada de filesystem Akai.
+// akai2sfz CLI -- list/extract/convert sobre a camada de filesystem Akai.
+#include "akai2sfz/converter.hpp"
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"
 
@@ -14,7 +15,9 @@ namespace {
 void print_usage(const char *argv0) {
   std::cerr << "uso:\n"
             << "  " << argv0 << " list <imagem> [-p particao(1-based)]\n"
-            << "  " << argv0 << " extract <imagem> <VOLUME/ARQUIVO> <dir_saida> [-p particao]\n";
+            << "  " << argv0 << " extract <imagem> <VOLUME/ARQUIVO> <dir_saida> [-p particao]\n"
+            << "  " << argv0 << " convert <imagem> <VOLUME/PROGRAM> <dir_saida> [-p particao]\n"
+            << "                 (so S3000 .a3p por enquanto; S1000 ainda nao tem parser de conteudo)\n";
 }
 
 std::string vol_type_label(raw::VolType t) {
@@ -122,6 +125,38 @@ int cmd_extract(const std::string &image_path, const std::string &akai_path,
   return 1;
 }
 
+int cmd_convert(const std::string &image_path, const std::string &akai_path,
+                 const std::string &out_dir, std::size_t partition_1based) {
+  std::string vol_name, program_name;
+  if (!split_vol_file(akai_path, vol_name, program_name)) {
+    std::cerr << "caminho invalido, esperado VOLUME/PROGRAM: " << akai_path << "\n";
+    return 1;
+  }
+
+  BlockDevice dev(image_path);
+  auto partitions = scan_partitions(dev);
+  if (partition_1based == 0 || partition_1based > partitions.size()) {
+    std::cerr << "particao invalida\n";
+    return 1;
+  }
+  OpenPartition part(dev, partitions[partition_1based - 1]);
+
+  ConvertResult r = convert_program(part, vol_name, program_name, out_dir);
+
+  for (const auto &w : r.warnings) {
+    std::cerr << "aviso: " << w << "\n";
+  }
+
+  if (!r.success) {
+    std::cerr << "erro: " << r.error << "\n";
+    return 1;
+  }
+
+  std::cerr << "SFZ: " << r.sfz_path << "\n";
+  std::cerr << "WAV: " << r.wav_paths.size() << " arquivo(s)\n";
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -148,6 +183,9 @@ int main(int argc, char **argv) {
     }
     if (args[0] == "extract" && args.size() >= 4) {
       return cmd_extract(args[1], args[2], args[3], partition);
+    }
+    if (args[0] == "convert" && args.size() >= 4) {
+      return cmd_convert(args[1], args[2], args[3], partition);
     }
   } catch (const std::exception &e) {
     std::cerr << "erro: " << e.what() << "\n";

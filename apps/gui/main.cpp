@@ -1,0 +1,14 @@
+#include "MainWindow.h"
+
+#include <QApplication>
+
+int main(int argc, char **argv) {
+  QApplication app(argc, argv);
+  app.setApplicationName("akai2sfz");
+
+  MainWindow window;
+  window.resize(1000, 700);
+  window.show();
+
+  return app.exec();
+}
