@@ -50,6 +50,14 @@
 // convertSelectedX() so resolvem o alvo e chamam o convert_* apropriado,
 // sem mostrar dialogo -- quem agrega os resultados e mostra o resumo final
 // (1 dialogo so, mesmo em lote) e o onConvertSelected().
+//
+// Visual: "rack de hardware vintage" -- painel escuro, leitura em ambar
+// estilo display VFD (mesmo tom que E-mu/Akai/Emulator usavam nos proprios
+// displays), botao de conversao como um botao fisico grande. Tema aplicado
+// via QSS (kStyleSheet, montado em buildStyleSheet() no .cpp) mais alguns
+// ajustes que QSS nao cobre (letter-spacing dos rotulos, feito via
+// QFont::setLetterSpacing -- QSS nao tem propriedade equivalente). Prototipo
+// visual validado antes como artifact HTML/CSS; ver git log.
 
 #include "akai2sfz/converter.hpp"
 #include "akai2sfz/emu_filesystem.hpp"
@@ -69,7 +77,7 @@ class QListWidget;
 class QListWidgetItem;
 class QTreeWidget;
 class QTreeWidgetItem;
-class QPlainTextEdit;
+class QTextEdit;
 class QPushButton;
 class QLabel;
 
@@ -90,7 +98,12 @@ private slots:
   void onBrowseOutputDir();
 
 private:
+  // Cor do texto do status bar (Info=cinza, Ok=verde, Warn=ambar, Error=vermelho) --
+  // ver setStatus() no .cpp.
+  enum class StatusKind { Info, Ok, Warn, Error };
+
   void log(const QString &line);
+  void setStatus(const QString &text, StatusKind kind = StatusKind::Info);
   void rebuildPartitionList();
   void rebuildVolumeList();
   void rebuildProgramTree();
@@ -133,7 +146,7 @@ private:
   QLineEdit *outputDirEdit_ = nullptr;
   QPushButton *browseOutputBtn_ = nullptr;
   QPushButton *convertBtn_ = nullptr;
-  QPlainTextEdit *logView_ = nullptr;
+  QTextEdit *logView_ = nullptr;
   QLabel *statusLabel_ = nullptr;
 
   bool isRoland_ = false;
