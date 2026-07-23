@@ -30,6 +30,16 @@
 // implementada na GUI (so no CLI, via busca recursiva) -- Volumes vira um
 // unico pseudo-item e Programs lista TODOS os .KRZ encontrados na arvore
 // inteira, nao so na raiz.
+//
+// Icones (icons.qrc, embutidos no binario via Qt Resource System): um icone
+// de CD generico aparece antes do texto em toda linha das colunas 1
+// (Particoes) e 2 (Volumes) -- as duas representam conceitos de midia/
+// estrutura fisica, nao conteudo. Na coluna 3 (Programs), cada "patch"
+// (Program Akai/Patch Roland/Preset E-mu/Program Kurzweil -- a unidade
+// convertivel) leva o icone do fabricante correspondente. Tamanho dos
+// icones e proporcional ao tamanho da fonte de cada QListWidget/QTreeWidget
+// (ver setIconSize() no construtor). Fontes das imagens originais:
+// `../../PICS` (logos de terceiros, uso interno/nao redistribuido).
 
 #include "akai2sfz/emu_filesystem.hpp"
 #include "akai2sfz/filesystem.hpp"
@@ -37,6 +47,7 @@
 #include "akai2sfz/kurzweil_filesystem.hpp"
 #include "akai2sfz/roland_filesystem.hpp"
 
+#include <QIcon>
 #include <QMainWindow>
 
 #include <memory>
@@ -126,4 +137,11 @@ private:
   // Kurzweil
   std::unique_ptr<akai2sfz::BlockDevice> kurzweilDevice_;
   std::unique_ptr<akai2sfz::KurzweilDisk> kurzweilDisk_;
+
+  // Icones (carregados uma vez no construtor a partir de icons.qrc).
+  QIcon cdIcon_;
+  QIcon akaiIcon_;
+  QIcon rolandIcon_;
+  QIcon emuIcon_;
+  QIcon kurzweilIcon_;
 };

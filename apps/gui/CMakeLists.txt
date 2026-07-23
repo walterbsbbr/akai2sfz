@@ -1,29 +1,35 @@
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 if(APPLE)
-  add_executable(akai2sfz_gui MACOSX_BUNDLE
+  add_executable(WJ-VSC MACOSX_BUNDLE
       main.cpp
       MainWindow.cpp
       MainWindow.h
+      icons.qrc
+      WJ-VSC.icns
   )
-  set_target_properties(akai2sfz_gui PROPERTIES
+  set_source_files_properties(WJ-VSC.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+  set_target_properties(WJ-VSC PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in
-      MACOSX_BUNDLE_BUNDLE_NAME "akai2sfz"
-      MACOSX_BUNDLE_GUI_IDENTIFIER "app.akai2sfz.gui"
+      MACOSX_BUNDLE_BUNDLE_NAME "WJ-VSC"
+      MACOSX_BUNDLE_GUI_IDENTIFIER "app.wjvsc.gui"
       MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
       MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+      MACOSX_BUNDLE_ICON_FILE "WJ-VSC.icns"
   )
 else()
-  add_executable(akai2sfz_gui
+  add_executable(WJ-VSC
       main.cpp
       MainWindow.cpp
       MainWindow.h
+      icons.qrc
   )
 endif()
 
-target_link_libraries(akai2sfz_gui PRIVATE akai2sfz_core Qt6::Widgets)
+target_link_libraries(WJ-VSC PRIVATE akai2sfz_core Qt6::Widgets)
 
-install(TARGETS akai2sfz_gui
+install(TARGETS WJ-VSC
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
 )
@@ -44,14 +50,14 @@ if(APPLE)
     # 3) so entao gera o .dmg, a partir do .app ja assinado
     add_custom_target(package_gui
         COMMAND ${MACDEPLOYQT_EXECUTABLE}
-                $<TARGET_BUNDLE_DIR:akai2sfz_gui>
+                $<TARGET_BUNDLE_DIR:WJ-VSC>
                 -verbose=1
-        COMMAND codesign --force --deep --sign - $<TARGET_BUNDLE_DIR:akai2sfz_gui>
-        COMMAND hdiutil create -volname akai2sfz -srcfolder $<TARGET_BUNDLE_DIR:akai2sfz_gui>
+        COMMAND codesign --force --deep --sign - $<TARGET_BUNDLE_DIR:WJ-VSC>
+        COMMAND hdiutil create -volname WJ-VSC -srcfolder $<TARGET_BUNDLE_DIR:WJ-VSC>
                 -ov -format UDZO
-                $<TARGET_BUNDLE_DIR:akai2sfz_gui>/../akai2sfz_gui.dmg
-        DEPENDS akai2sfz_gui
-        COMMENT "Empacotando akai2sfz_gui.app (Qt + libsndfile), reassinando e gerando .dmg"
+                $<TARGET_BUNDLE_DIR:WJ-VSC>/../WJ-VSC.dmg
+        DEPENDS WJ-VSC
+        COMMENT "Empacotando WJ-VSC.app (Qt + libsndfile), reassinando e gerando .dmg"
         VERBATIM
     )
   else()

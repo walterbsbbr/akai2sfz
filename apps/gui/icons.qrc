@@ -1,0 +1,9 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file alias="cd.png">icons/cd.png</file>
+    <file alias="akai.png">icons/akai.png</file>
+    <file alias="roland.png">icons/roland.png</file>
+    <file alias="emu.png">icons/emu.png</file>
+    <file alias="kurzweil.png">icons/kurzweil.png</file>
+  </qresource>
+</RCC>

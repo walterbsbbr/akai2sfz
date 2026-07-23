@@ -79,24 +79,25 @@ constexpr int kRolePresetName = Qt::UserRole + 3; // E-mu: nome do preset (item 
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-  setWindowTitle("akai2sfz -- leitor de CD Akai/Roland/E-mu/Kurzweil e conversor para SFZ");
+  setWindowTitle("WJ-VSC (Vintage Sampler Converter) -- Akai/Roland/E-mu/Kurzweil CD reader "
+                 "and SFZ converter");
 
   auto *central = new QWidget(this);
   auto *mainLayout = new QVBoxLayout(central);
 
   // --- topo: imagem ---
-  auto *topBox = new QGroupBox("Imagem do CD", central);
+  auto *topBox = new QGroupBox("CD Image", central);
   auto *topLayout = new QHBoxLayout(topBox);
 
   imagePathEdit_ = new QLineEdit(topBox);
   imagePathEdit_->setReadOnly(true);
-  imagePathEdit_->setPlaceholderText("Nenhuma imagem carregada...");
+  imagePathEdit_->setPlaceholderText("No image loaded...");
   topLayout->addWidget(imagePathEdit_, 1);
 
-  browseBtn_ = new QPushButton("Procurar...", topBox);
+  browseBtn_ = new QPushButton("Browse...", topBox);
   topLayout->addWidget(browseBtn_);
 
-  loadBtn_ = new QPushButton("Carregar", topBox);
+  loadBtn_ = new QPushButton("Load", topBox);
   loadBtn_->setEnabled(false);
   topLayout->addWidget(loadBtn_);
 
@@ -105,7 +106,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // --- meio: 3 colunas -- Particoes | Volumes | Programs (expansivel) ---
   auto *splitter = new QSplitter(Qt::Horizontal, central);
 
-  auto *partBox = new QGroupBox("Particoes", splitter);
+  auto *partBox = new QGroupBox("Partitions", splitter);
   auto *partLayout = new QVBoxLayout(partBox);
   partitionList_ = new QListWidget(partBox);
   partLayout->addWidget(partitionList_);
@@ -129,17 +130,33 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   splitter->setStretchFactor(1, 1);
   splitter->setStretchFactor(2, 2);
 
+  // Icones (ver comentario no .h): tamanho proporcional ao texto -- um
+  // pouco maior que a altura da fonte usada nas listas/arvore. O icone do
+  // CD tambem vira o icone da janela (barra de titulo/dock/Cmd+Tab).
+  cdIcon_ = QIcon(":/icons/cd.png");
+  akaiIcon_ = QIcon(":/icons/akai.png");
+  rolandIcon_ = QIcon(":/icons/roland.png");
+  emuIcon_ = QIcon(":/icons/emu.png");
+  kurzweilIcon_ = QIcon(":/icons/kurzweil.png");
+  setWindowIcon(cdIcon_);
+
+  int iconEdge = static_cast<int>(partitionList_->fontMetrics().height() * 1.4);
+  QSize iconSize(iconEdge, iconEdge);
+  partitionList_->setIconSize(iconSize);
+  volumeList_->setIconSize(iconSize);
+  programTree_->setIconSize(iconSize);
+
   mainLayout->addWidget(splitter, 1);
 
   // --- saida + converter ---
-  auto *outBox = new QGroupBox("Conversao", central);
+  auto *outBox = new QGroupBox("Conversion", central);
   auto *outLayout = new QHBoxLayout(outBox);
-  outLayout->addWidget(new QLabel("Diretorio de saida:", outBox));
+  outLayout->addWidget(new QLabel("Output directory:", outBox));
   outputDirEdit_ = new QLineEdit(outBox);
   outLayout->addWidget(outputDirEdit_, 1);
-  browseOutputBtn_ = new QPushButton("Procurar...", outBox);
+  browseOutputBtn_ = new QPushButton("Browse...", outBox);
   outLayout->addWidget(browseOutputBtn_);
-  convertBtn_ = new QPushButton("Converter program selecionado", outBox);
+  convertBtn_ = new QPushButton("Convert selected program", outBox);
   convertBtn_->setEnabled(false);
   outLayout->addWidget(convertBtn_);
   mainLayout->addWidget(outBox);
@@ -151,7 +168,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   logView_->setFixedHeight(140);
   mainLayout->addWidget(logView_);
 
-  statusLabel_ = new QLabel("Pronto.", central);
+  statusLabel_ = new QLabel("Ready.", central);
   mainLayout->addWidget(statusLabel_);
 
   setCentralWidget(central);
@@ -168,9 +185,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &MainWindow::onProgramCurrentItemChanged);
   connect(programTree_, &QTreeWidget::itemExpanded, this, &MainWindow::onProgramItemExpanded);
 
-  log("akai2sfz iniciado. Abra uma imagem de CD Akai (S1000/S3000), Roland (S-750/760/770), "
-      "E-mu (EIII/ESI-32/EIV) ou Kurzweil (K2000/K2500/K2600) para comecar -- o fabricante e "
-      "detectado automaticamente.");
+  log("WJ-VSC started. Open an Akai (S1000/S3000), Roland (S-750/760/770), E-mu "
+      "(EIII/ESI-32/EIV) or Kurzweil (K2000/K2500/K2600) CD image to begin -- the "
+      "manufacturer is detected automatically.");
 }
 
 void MainWindow::log(const QString &line) {
@@ -179,8 +196,8 @@ void MainWindow::log(const QString &line) {
 
 void MainWindow::onBrowseImage() {
   QString path = QFileDialog::getOpenFileName(
-      this, "Selecione a imagem do CD", QString(),
-      "Imagens de CD (*.iso *.cue *.bin *.nrg *.mdf);;Todos os arquivos (*)");
+      this, "Select CD Image", QString(),
+      "CD Images (*.iso *.cue *.bin *.nrg *.mdf);;All files (*)");
   if (path.isEmpty()) return;
 
   imagePathEdit_->setText(path);
@@ -214,7 +231,7 @@ void MainWindow::onLoadImage() {
       isRoland_ = true;
       isEmu_ = false;
       isKurzweil_ = false;
-      log(QString("Disco Roland detectado: '%1'.")
+      log(QString("Roland disk detected: '%1'.")
               .arg(QString::fromStdString(rolandDisk_->drive_name())));
       rebuildPartitionList();
       return;
@@ -225,7 +242,7 @@ void MainWindow::onLoadImage() {
       isRoland_ = false;
       isEmu_ = true;
       isKurzweil_ = false;
-      log("Disco E-mu detectado (EIII/ESI-32/EIV, container EMU3).");
+      log("E-mu disk detected (EIII/ESI-32/EIV, EMU3 container).");
       rebuildPartitionList();
       return;
     }
@@ -243,7 +260,7 @@ void MainWindow::onLoadImage() {
       isRoland_ = false;
       isEmu_ = false;
       isKurzweil_ = true;
-      log("Disco Kurzweil detectado (FAT16, formato .krz).");
+      log("Kurzweil disk detected (FAT16, .krz format).");
       rebuildPartitionList();
       return;
     }
@@ -258,20 +275,20 @@ void MainWindow::onLoadImage() {
     device_ = open_cd_image(path);
     partitions_ = scan_partitions(*device_);
   } catch (const std::exception &e) {
-    QMessageBox::critical(this, "Erro", QString("Falha ao abrir a imagem:\n%1").arg(e.what()));
-    statusLabel_->setText("Erro ao abrir imagem.");
+    QMessageBox::critical(this, "Error", QString("Failed to open image:\n%1").arg(e.what()));
+    statusLabel_->setText("Error opening image.");
     return;
   }
 
   if (partitions_.empty()) {
-    QMessageBox::warning(this, "Nenhuma particao",
-                          "Nenhuma particao Akai valida foi encontrada nesta imagem, e ela nao "
-                          "tem a assinatura de um disco Roland, E-mu ou Kurzweil.");
-    statusLabel_->setText("Nenhuma particao valida encontrada.");
+    QMessageBox::warning(this, "No partition",
+                          "No valid Akai partition was found in this image, and it doesn't "
+                          "have the signature of a Roland, E-mu, or Kurzweil disk.");
+    statusLabel_->setText("No valid partition found.");
     return;
   }
 
-  log(QString("%1 particao(oes) Akai encontrada(s).").arg(partitions_.size()));
+  log(QString("%1 Akai partition(s) found.").arg(partitions_.size()));
   rebuildPartitionList();
 }
 
@@ -281,7 +298,8 @@ void MainWindow::rebuildPartitionList() {
   if (isRoland_) {
     // Roland nao tem conceito de multiplas particoes -- um unico pseudo-item.
     auto *item = new QListWidgetItem(
-        QString("Disco Roland  (%1 blocos)").arg(rolandDisk_->capacity_blocks()), partitionList_);
+        QString("Roland disk  (%1 blocks)").arg(rolandDisk_->capacity_blocks()), partitionList_);
+    item->setIcon(cdIcon_);
     item->setData(kRolePartitionIndex, static_cast<qulonglong>(0));
     partitionList_->setCurrentRow(0); // dispara onPartitionSelectionChanged
     return;
@@ -289,14 +307,16 @@ void MainWindow::rebuildPartitionList() {
 
   if (isEmu_) {
     // E-mu tambem nao tem conceito de multiplas particoes -- um unico pseudo-item.
-    auto *item = new QListWidgetItem("Disco E-mu", partitionList_);
+    auto *item = new QListWidgetItem("E-mu disk", partitionList_);
+    item->setIcon(cdIcon_);
     item->setData(kRolePartitionIndex, static_cast<qulonglong>(0));
     partitionList_->setCurrentRow(0); // dispara onPartitionSelectionChanged
     return;
   }
 
   if (isKurzweil_) {
-    auto *item = new QListWidgetItem("Disco Kurzweil", partitionList_);
+    auto *item = new QListWidgetItem("Kurzweil disk", partitionList_);
+    item->setIcon(cdIcon_);
     item->setData(kRolePartitionIndex, static_cast<qulonglong>(0));
     partitionList_->setCurrentRow(0); // dispara onPartitionSelectionChanged
     return;
@@ -304,8 +324,9 @@ void MainWindow::rebuildPartitionList() {
 
   for (std::size_t i = 0; i < partitions_.size(); ++i) {
     QString letter = QString::fromStdString(partition_label(i));
-    QString label = QString("Particao %1  (%2 blocos)").arg(letter).arg(partitions_[i].size_blocks);
+    QString label = QString("Partition %1  (%2 blocks)").arg(letter).arg(partitions_[i].size_blocks);
     auto *item = new QListWidgetItem(label, partitionList_);
+    item->setIcon(cdIcon_);
     item->setData(kRolePartitionIndex, static_cast<qulonglong>(i));
   }
   if (partitionList_->count() > 0) {
@@ -331,7 +352,7 @@ void MainWindow::onPartitionSelectionChanged() {
   try {
     partition_ = std::make_unique<OpenPartition>(*device_, partitions_[pi]);
   } catch (const std::exception &e) {
-    QMessageBox::critical(this, "Erro", QString("Falha ao abrir particao:\n%1").arg(e.what()));
+    QMessageBox::critical(this, "Error", QString("Failed to open partition:\n%1").arg(e.what()));
     return;
   }
 
@@ -347,11 +368,13 @@ void MainWindow::rebuildVolumeList() {
     if (volumes.empty()) {
       // Sem volume-scoping de Patch->Volume implementado ainda (ver README):
       // um unico pseudo-item mostra todos os patches do disco.
-      auto *item = new QListWidgetItem("(todos os patches)", volumeList_);
+      auto *item = new QListWidgetItem("(all patches)", volumeList_);
+      item->setIcon(cdIcon_);
       item->setData(kRoleVolumeIndex, static_cast<qulonglong>(0));
     } else {
       for (const auto &v : volumes) {
         auto *item = new QListWidgetItem(QString::fromStdString(v.name), volumeList_);
+        item->setIcon(cdIcon_);
         item->setData(kRoleVolumeIndex, static_cast<qulonglong>(v.index));
       }
     }
@@ -364,12 +387,13 @@ void MainWindow::rebuildVolumeList() {
     for (const auto &folder : emuDisk_->list_folders()) {
       QString name = QString::fromStdString(folder.name);
       auto *item = new QListWidgetItem(name, volumeList_);
+      item->setIcon(cdIcon_);
       item->setData(kRoleFolderName, name);
     }
     if (volumeList_->count() > 0) {
       volumeList_->setCurrentRow(0);
     } else {
-      statusLabel_->setText("Disco E-mu sem pastas ativas.");
+      statusLabel_->setText("E-mu disk has no active folders.");
     }
     return;
   }
@@ -378,7 +402,8 @@ void MainWindow::rebuildVolumeList() {
     // Navegacao por pasta ainda nao implementada na GUI (o FAT16 pode ter
     // subdiretorios de verdade, mas a busca de .KRZ e sempre recursiva na
     // arvore inteira) -- um unico pseudo-item, mesmo padrao do Roland.
-    auto *item = new QListWidgetItem("(todos os arquivos .krz)", volumeList_);
+    auto *item = new QListWidgetItem("(all .krz files)", volumeList_);
+    item->setIcon(cdIcon_);
     item->setData(kRoleVolumeIndex, static_cast<qulonglong>(0));
     if (volumeList_->count() > 0) volumeList_->setCurrentRow(0);
     return;
@@ -392,12 +417,13 @@ void MainWindow::rebuildVolumeList() {
 
     QString vname = QString::fromStdString(partition_->volume_name(vi));
     auto *item = new QListWidgetItem(QString("%1  [%2]").arg(vname, typeLabel), volumeList_);
+    item->setIcon(cdIcon_);
     item->setData(kRoleVolumeIndex, static_cast<qulonglong>(vi));
   }
   if (volumeList_->count() > 0) {
     volumeList_->setCurrentRow(0); // dispara onVolumeSelectionChanged
   } else {
-    statusLabel_->setText("Particao sem volumes S1000/S3000/CD3000 ativos.");
+    statusLabel_->setText("Partition has no active S1000/S3000/CD3000 volumes.");
   }
 }
 
@@ -438,16 +464,17 @@ void MainWindow::rebuildProgramTreeRoland() {
   for (const auto &p : patches) {
     QString name = QString::fromStdString(p.name);
     auto *item = new QTreeWidgetItem(programTree_, {name});
+    item->setIcon(0, rolandIcon_);
     item->setData(0, kRoleFileName, name);
     // filho placeholder so para mostrar a seta de expandir; substituido
     // pelas teclas/samples reais em onProgramItemExpanded.
-    auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
+    auto *placeholder = new QTreeWidgetItem(item, {"loading..."});
     placeholder->setData(0, kRolePlaceholder, true);
   }
 
   statusLabel_->setText(
-      QString("%1 patch(es) (todos os patches do disco -- volume-scoping ainda nao "
-              "implementado, ver README).")
+      QString("%1 patch(es) (all patches on the disk -- volume scoping not implemented "
+              "yet, see README).")
           .arg(patches.size()));
 }
 
@@ -465,11 +492,11 @@ void MainWindow::rebuildProgramTreeEmu() {
       item->setData(0, kRoleFileName, name);
       // filho placeholder so para mostrar a seta de expandir; substituido
       // pelos presets reais em onProgramItemExpanded.
-      auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
+      auto *placeholder = new QTreeWidgetItem(item, {"loading..."});
       placeholder->setData(0, kRolePlaceholder, true);
     }
 
-    statusLabel_->setText(QString("%1 bank(s) nesta pasta.").arg(files.size()));
+    statusLabel_->setText(QString("%1 bank(s) in this folder.").arg(files.size()));
     return;
   }
 }
@@ -501,11 +528,11 @@ void MainWindow::rebuildProgramTreeKurzweil() {
     item->setData(0, kRoleFileName, name);
     // filho placeholder so para mostrar a seta de expandir; substituido
     // pelos Programs reais em onProgramItemExpanded.
-    auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
+    auto *placeholder = new QTreeWidgetItem(item, {"loading..."});
     placeholder->setData(0, kRolePlaceholder, true);
   }
 
-  statusLabel_->setText(QString("%1 arquivo(s) .krz encontrado(s) na imagem.").arg(files.size()));
+  statusLabel_->setText(QString("%1 .krz file(s) found in the image.").arg(files.size()));
 }
 
 void MainWindow::rebuildProgramTree() {
@@ -525,19 +552,20 @@ void MainWindow::rebuildProgramTree() {
     QString label = QString("%1.%2  [%3, %4]")
                          .arg(fname, ext, QString::fromStdString(typeName), formatSize(f.size));
     auto *item = new QTreeWidgetItem(programTree_, {label});
+    item->setIcon(0, akaiIcon_);
     item->setData(0, kRoleFileName, fname);
     item->setData(0, kRoleExt, ext);
 
     if (ext == "a3p" || ext == "a1p") {
       // filho placeholder so para mostrar a seta de expandir; substituido
       // por samples reais em onProgramItemExpanded (carregamento sob demanda).
-      auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
+      auto *placeholder = new QTreeWidgetItem(item, {"loading..."});
       placeholder->setData(0, kRolePlaceholder, true);
     }
   }
 
   statusLabel_->setText(
-      QString("%1 program(s) neste volume (%2 arquivo(s) no total, incluindo samples).")
+      QString("%1 program(s) in this volume (%2 file(s) total, including samples).")
           .arg(programs)
           .arg(total));
 }
@@ -578,7 +606,7 @@ void MainWindow::loadPatchPartialsRoland(QTreeWidgetItem *patchItem) {
       }
     }
     if (!found) {
-      new QTreeWidgetItem(patchItem, {"(patch nao encontrado)"});
+      new QTreeWidgetItem(patchItem, {"(patch not found)"});
       return;
     }
 
@@ -619,10 +647,10 @@ void MainWindow::loadPatchPartialsRoland(QTreeWidgetItem *patchItem) {
     }
 
     if (shown == 0) {
-      new QTreeWidgetItem(patchItem, {"(sem teclas mapeadas)"});
+      new QTreeWidgetItem(patchItem, {"(no keys mapped)"});
     }
   } catch (const std::exception &e) {
-    new QTreeWidgetItem(patchItem, {QString("(erro ao ler patch: %1)").arg(e.what())});
+    new QTreeWidgetItem(patchItem, {QString("(error reading patch: %1)").arg(e.what())});
   }
 }
 
@@ -642,7 +670,7 @@ void MainWindow::loadBankPresetsEmu(QTreeWidgetItem *bankItem) {
       }
     }
     if (!foundFolder) {
-      new QTreeWidgetItem(bankItem, {"(pasta nao encontrada)"});
+      new QTreeWidgetItem(bankItem, {"(folder not found)"});
       return;
     }
 
@@ -656,14 +684,14 @@ void MainWindow::loadBankPresetsEmu(QTreeWidgetItem *bankItem) {
       }
     }
     if (!foundBank) {
-      new QTreeWidgetItem(bankItem, {"(bank nao encontrado)"});
+      new QTreeWidgetItem(bankItem, {"(bank not found)"});
       return;
     }
 
     auto bankBytes = emuDisk_->read_file(bankEntry);
     emu_raw::BankFormat format = detect_emu_bank_format(bankBytes);
     if (format == emu_raw::BankFormat::Unknown) {
-      new QTreeWidgetItem(bankItem, {"(formato de bank desconhecido)"});
+      new QTreeWidgetItem(bankItem, {"(unknown bank format)"});
       return;
     }
 
@@ -672,14 +700,15 @@ void MainWindow::loadBankPresetsEmu(QTreeWidgetItem *bankItem) {
       EmuPreset p = parse_emu_preset(bankBytes, format, pi);
       QString name = QString::fromStdString(p.name);
       auto *item = new QTreeWidgetItem(bankItem, {name});
+      item->setIcon(0, emuIcon_);
       item->setData(0, kRolePresetName, name);
     }
 
     if (npresets == 0) {
-      new QTreeWidgetItem(bankItem, {"(sem presets)"});
+      new QTreeWidgetItem(bankItem, {"(no presets)"});
     }
   } catch (const std::exception &e) {
-    new QTreeWidgetItem(bankItem, {QString("(erro ao ler bank: %1)").arg(e.what())});
+    new QTreeWidgetItem(bankItem, {QString("(error reading bank: %1)").arg(e.what())});
   }
 }
 
@@ -700,7 +729,7 @@ void MainWindow::loadProgramsKurzweil(QTreeWidgetItem *krzFileItem) {
       }
     }
     if (!entry) {
-      new QTreeWidgetItem(krzFileItem, {"(arquivo nao encontrado)"});
+      new QTreeWidgetItem(krzFileItem, {"(file not found)"});
       return;
     }
 
@@ -713,15 +742,16 @@ void MainWindow::loadProgramsKurzweil(QTreeWidgetItem *krzFileItem) {
       if (o.type_raw != static_cast<int>(krz_raw::ObjectType::Program)) continue;
       QString name = QString::fromStdString(o.name);
       auto *item = new QTreeWidgetItem(krzFileItem, {name});
+      item->setIcon(0, kurzweilIcon_);
       item->setData(0, kRolePresetName, name);
       ++shown;
     }
 
     if (shown == 0) {
-      new QTreeWidgetItem(krzFileItem, {"(sem programs)"});
+      new QTreeWidgetItem(krzFileItem, {"(no programs)"});
     }
   } catch (const std::exception &e) {
-    new QTreeWidgetItem(krzFileItem, {QString("(erro ao ler .krz: %1)").arg(e.what())});
+    new QTreeWidgetItem(krzFileItem, {QString("(error reading .krz: %1)").arg(e.what())});
   }
 }
 
@@ -733,7 +763,7 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
   auto files = list_files(*partition_, currentVolumeIndex_);
   const FileEntry *progEntry = findFile(files, programName, ext.toStdString());
   if (!progEntry) {
-    new QTreeWidgetItem(programItem, {"(program nao encontrado)"});
+    new QTreeWidgetItem(programItem, {"(program not found)"});
     return;
   }
 
@@ -758,7 +788,7 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
     }
 
     if (uniqueSamples.empty()) {
-      new QTreeWidgetItem(programItem, {"(sem samples referenciados)"});
+      new QTreeWidgetItem(programItem, {"(no samples referenced)"});
       return;
     }
 
@@ -769,12 +799,12 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
                            ? QString("%1.%2  [%3]")
                                  .arg(QString::fromStdString(sname), sampleExtQ,
                                       formatSize(sampleEntry->size))
-                           : QString("%1.%2  [nao encontrado no volume]")
+                           : QString("%1.%2  [not found in volume]")
                                  .arg(QString::fromStdString(sname), sampleExtQ);
       new QTreeWidgetItem(programItem, {label});
     }
   } catch (const std::exception &e) {
-    new QTreeWidgetItem(programItem, {QString("(erro ao ler program: %1)").arg(e.what())});
+    new QTreeWidgetItem(programItem, {QString("(error reading program: %1)").arg(e.what())});
   }
 }
 
@@ -806,37 +836,37 @@ void MainWindow::onProgramCurrentItemChanged(QTreeWidgetItem *current, QTreeWidg
 }
 
 void MainWindow::onBrowseOutputDir() {
-  QString dir = QFileDialog::getExistingDirectory(this, "Diretorio de saida");
+  QString dir = QFileDialog::getExistingDirectory(this, "Output Directory");
   if (!dir.isEmpty()) outputDirEdit_->setText(dir);
 }
 
 void MainWindow::convertSelectedRoland(QTreeWidgetItem *patchItem, const QString &outDir) {
   QString patchName = patchItem->data(0, kRoleFileName).toString();
 
-  log(QString("Convertendo patch '%1'...").arg(patchName));
-  statusLabel_->setText("Convertendo...");
+  log(QString("Converting patch '%1'...").arg(patchName));
+  statusLabel_->setText("Converting...");
 
   ConvertResult result = convert_roland_patch(*rolandDisk_, patchName.toStdString(),
                                                outDir.toStdString());
 
   for (const auto &w : result.warnings) {
-    log("aviso: " + QString::fromStdString(w));
+    log("warning: " + QString::fromStdString(w));
   }
 
   if (!result.success) {
-    log("erro: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversao falhou", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversao falhou.");
+    log("error: " + QString::fromStdString(result.error));
+    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
+    statusLabel_->setText("Conversion failed.");
     return;
   }
 
   log(QString("OK: %1 (%2 WAV)")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversao concluida.");
+  statusLabel_->setText("Conversion complete.");
   QMessageBox::information(
-      this, "Conversao concluida",
-      QString("SFZ: %1\nArquivos WAV: %2")
+      this, "Conversion complete",
+      QString("SFZ: %1\nWAV files: %2")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
 }
@@ -849,30 +879,30 @@ void MainWindow::convertSelectedEmu(QTreeWidgetItem *presetItem, const QString &
   QString presetName = presetItem->data(0, kRolePresetName).toString();
   QString folderName = QString::fromStdString(currentFolderName_);
 
-  log(QString("Convertendo %1/%2/%3...").arg(folderName, bankName, presetName));
-  statusLabel_->setText("Convertendo...");
+  log(QString("Converting %1/%2/%3...").arg(folderName, bankName, presetName));
+  statusLabel_->setText("Converting...");
 
   ConvertResult result = convert_emu_preset(*emuDisk_, currentFolderName_, bankName.toStdString(),
                                              presetName.toStdString(), outDir.toStdString());
 
   for (const auto &w : result.warnings) {
-    log("aviso: " + QString::fromStdString(w));
+    log("warning: " + QString::fromStdString(w));
   }
 
   if (!result.success) {
-    log("erro: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversao falhou", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversao falhou.");
+    log("error: " + QString::fromStdString(result.error));
+    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
+    statusLabel_->setText("Conversion failed.");
     return;
   }
 
   log(QString("OK: %1 (%2 WAV)")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversao concluida.");
+  statusLabel_->setText("Conversion complete.");
   QMessageBox::information(
-      this, "Conversao concluida",
-      QString("SFZ: %1\nArquivos WAV: %2")
+      this, "Conversion complete",
+      QString("SFZ: %1\nWAV files: %2")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
 }
@@ -884,30 +914,30 @@ void MainWindow::convertSelectedKurzweil(QTreeWidgetItem *programItem, const QSt
   QString krzFileName = krzFileItem->data(0, kRoleFileName).toString();
   QString programName = programItem->data(0, kRolePresetName).toString();
 
-  log(QString("Convertendo %1/%2...").arg(krzFileName, programName));
-  statusLabel_->setText("Convertendo...");
+  log(QString("Converting %1/%2...").arg(krzFileName, programName));
+  statusLabel_->setText("Converting...");
 
   ConvertResult result = convert_krz_program(*kurzweilDisk_, krzFileName.toStdString(),
                                               programName.toStdString(), outDir.toStdString());
 
   for (const auto &w : result.warnings) {
-    log("aviso: " + QString::fromStdString(w));
+    log("warning: " + QString::fromStdString(w));
   }
 
   if (!result.success) {
-    log("erro: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversao falhou", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversao falhou.");
+    log("error: " + QString::fromStdString(result.error));
+    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
+    statusLabel_->setText("Conversion failed.");
     return;
   }
 
   log(QString("OK: %1 (%2 WAV)")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversao concluida.");
+  statusLabel_->setText("Conversion complete.");
   QMessageBox::information(
-      this, "Conversao concluida",
-      QString("SFZ: %1\nArquivos WAV: %2")
+      this, "Conversion complete",
+      QString("SFZ: %1\nWAV files: %2")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
 }
@@ -918,8 +948,8 @@ void MainWindow::onConvertSelected() {
 
   QString outDir = outputDirEdit_->text();
   if (outDir.isEmpty()) {
-    QMessageBox::warning(this, "Diretorio de saida",
-                          "Escolha um diretorio de saida antes de converter.");
+    QMessageBox::warning(this, "Output Directory",
+                          "Choose an output directory before converting.");
     return;
   }
 
@@ -947,30 +977,30 @@ void MainWindow::onConvertSelected() {
   QString volName = QString::fromStdString(partition_->volume_name(currentVolumeIndex_));
   QString fileName = progItem->data(0, kRoleFileName).toString();
 
-  log(QString("Convertendo %1/%2...").arg(volName, fileName));
-  statusLabel_->setText("Convertendo...");
+  log(QString("Converting %1/%2...").arg(volName, fileName));
+  statusLabel_->setText("Converting...");
 
   ConvertResult result = convert_program(*partition_, volName.toStdString(),
                                           fileName.toStdString(), outDir.toStdString());
 
   for (const auto &w : result.warnings) {
-    log("aviso: " + QString::fromStdString(w));
+    log("warning: " + QString::fromStdString(w));
   }
 
   if (!result.success) {
-    log("erro: " + QString::fromStdString(result.error));
-    QMessageBox::critical(this, "Conversao falhou", QString::fromStdString(result.error));
-    statusLabel_->setText("Conversao falhou.");
+    log("error: " + QString::fromStdString(result.error));
+    QMessageBox::critical(this, "Conversion failed", QString::fromStdString(result.error));
+    statusLabel_->setText("Conversion failed.");
     return;
   }
 
   log(QString("OK: %1 (%2 WAV)")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
-  statusLabel_->setText("Conversao concluida.");
+  statusLabel_->setText("Conversion complete.");
   QMessageBox::information(
-      this, "Conversao concluida",
-      QString("SFZ: %1\nArquivos WAV: %2")
+      this, "Conversion complete",
+      QString("SFZ: %1\nWAV files: %2")
           .arg(QString::fromStdString(result.sfz_path))
           .arg(result.wav_paths.size()));
 }

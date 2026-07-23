@@ -4,7 +4,8 @@
 
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
-  app.setApplicationName("akai2sfz");
+  app.setApplicationName("WJ-VSC");
+  app.setApplicationDisplayName("WJ-VSC (Vintage Sampler Converter)");
 
   MainWindow window;
   window.resize(1000, 700);

@@ -479,8 +479,8 @@ CLI é gerada (`-DAKAI2SFZ_BUILD_GUI=OFF` força isso).
 cmake --build build --target package_gui
 ```
 
-Gera `build/apps/gui/akai2sfz_gui.app` (Qt e `libsndfile` já embutidos,
-assinado ad-hoc) e `build/apps/gui/akai2sfz_gui.dmg` ao lado.
+Gera `build/apps/gui/WJ-VSC.app` (Qt e `libsndfile` já embutidos,
+assinado ad-hoc) e `build/apps/gui/WJ-VSC.dmg` ao lado.
 
 ## Uso
 
@@ -513,10 +513,16 @@ fabricante (Akai, Roland, E-mu ou Kurzweil) é detectado automaticamente pela im
 ### GUI
 
 ```sh
-./build/apps/gui/akai2sfz_gui.app/Contents/MacOS/akai2sfz_gui   # direto do build
+./build/apps/gui/WJ-VSC.app/Contents/MacOS/WJ-VSC   # direto do build
 # ou, depois de `cmake --build build --target package_gui`:
-open build/apps/gui/akai2sfz_gui.app
+open build/apps/gui/WJ-VSC.app
 ```
+
+A GUI se chama **WJ-VSC** (Vintage Sampler Converter) -- nome e ícone (um CD
+genérico) próprios, separados do nome `akai2sfz` do projeto/CLI. No Finder e
+no Dock ela aparece como "WJ-VSC"; toda a interface (menus, diálogos,
+mensagens de status/log) está em inglês, diferente da CLI e dos comentários
+do código-fonte, que continuam em português.
 
 Abra uma imagem (Akai, Roland, E-mu ou Kurzweil, qualquer formato de
 container suportado), navegue Partições → Volumes → Programs. Para
