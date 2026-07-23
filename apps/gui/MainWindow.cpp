@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 #include "akai2sfz/akai_format.hpp"
 #include "akai2sfz/converter.hpp"
+#include "akai2sfz/roland_converter.hpp"
+#include "akai2sfz/roland_format.hpp"
 
 #include <QFileDialog>
 #include <QGroupBox>
@@ -54,17 +56,23 @@ const FileEntry *findFile(const std::vector<FileEntry> &files, const std::string
   return nullptr;
 }
 
+QString midiNoteName(int note) {
+  static const char *names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+  int octave = (note / 12) - 1;
+  return QString("%1%2").arg(names[note % 12]).arg(octave);
+}
+
 // Papeis customizados nos itens de lista/arvore, para recuperar dados ao converter.
 constexpr int kRolePartitionIndex = Qt::UserRole;
 constexpr int kRoleVolumeIndex = Qt::UserRole;
-constexpr int kRoleFileName = Qt::UserRole;
+constexpr int kRoleFileName = Qt::UserRole; // Akai: nome do arquivo; Roland: nome do patch
 constexpr int kRoleExt = Qt::UserRole + 1;
 constexpr int kRolePlaceholder = Qt::UserRole + 2;
 
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-  setWindowTitle("akai2sfz -- leitor de CD Akai e conversor para SFZ");
+  setWindowTitle("akai2sfz -- leitor de CD Akai/Roland e conversor para SFZ");
 
   auto *central = new QWidget(this);
   auto *mainLayout = new QVBoxLayout(central);
@@ -153,7 +161,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &MainWindow::onProgramCurrentItemChanged);
   connect(programTree_, &QTreeWidget::itemExpanded, this, &MainWindow::onProgramItemExpanded);
 
-  log("akai2sfz iniciado. Abra uma imagem ISO de um CD Akai S1000/S3000 para comecar.");
+  log("akai2sfz iniciado. Abra uma imagem de CD Akai (S1000/S3000) ou Roland (S-750/760/770) "
+      "para comecar -- o fabricante e detectado automaticamente.");
 }
 
 void MainWindow::log(const QString &line) {
@@ -162,7 +171,7 @@ void MainWindow::log(const QString &line) {
 
 void MainWindow::onBrowseImage() {
   QString path = QFileDialog::getOpenFileName(
-      this, "Selecione a imagem do CD Akai", QString(),
+      this, "Selecione a imagem do CD", QString(),
       "Imagens de CD (*.iso *.cue *.bin *.nrg *.mdf);;Todos os arquivos (*)");
   if (path.isEmpty()) return;
 
@@ -176,9 +185,30 @@ void MainWindow::onLoadImage() {
   programTree_->clear();
   partition_.reset();
   device_.reset();
+  rolandDisk_.reset();
+  rolandDevice_.reset();
   convertBtn_->setEnabled(false);
 
   std::string path = imagePathEdit_->text().toStdString();
+
+  // Tenta Roland primeiro (deteccao rapida: assinatura no bloco 0 com
+  // block_size=512). Se nao bater, tenta Akai.
+  try {
+    auto rdev = std::make_unique<BlockDevice>(path, roland_raw::kBlockSize);
+    if (looks_like_roland(*rdev)) {
+      rolandDevice_ = std::move(rdev);
+      rolandDisk_ = std::make_unique<RolandDisk>(*rolandDevice_);
+      isRoland_ = true;
+      log(QString("Disco Roland detectado: '%1'.")
+              .arg(QString::fromStdString(rolandDisk_->drive_name())));
+      rebuildPartitionList();
+      return;
+    }
+  } catch (const std::exception &) {
+    // nao e Roland (ou erro ao abrir) -- cai para Akai abaixo
+  }
+
+  isRoland_ = false;
   try {
     device_ = open_cd_image(path);
     partitions_ = scan_partitions(*device_);
@@ -190,18 +220,28 @@ void MainWindow::onLoadImage() {
 
   if (partitions_.empty()) {
     QMessageBox::warning(this, "Nenhuma particao",
-                          "Nenhuma particao Akai valida foi encontrada nesta imagem.\n"
-                          "Containers MDF/NRG/BIN+CUE ainda nao sao suportados (ver README).");
-    statusLabel_->setText("Nenhuma particao Akai valida encontrada.");
+                          "Nenhuma particao Akai valida foi encontrada nesta imagem, e ela nao "
+                          "tem a assinatura de um disco Roland.");
+    statusLabel_->setText("Nenhuma particao valida encontrada.");
     return;
   }
 
-  log(QString("%1 particao(oes) encontrada(s).").arg(partitions_.size()));
+  log(QString("%1 particao(oes) Akai encontrada(s).").arg(partitions_.size()));
   rebuildPartitionList();
 }
 
 void MainWindow::rebuildPartitionList() {
   partitionList_->clear();
+
+  if (isRoland_) {
+    // Roland nao tem conceito de multiplas particoes -- um unico pseudo-item.
+    auto *item = new QListWidgetItem(
+        QString("Disco Roland  (%1 blocos)").arg(rolandDisk_->capacity_blocks()), partitionList_);
+    item->setData(kRolePartitionIndex, static_cast<qulonglong>(0));
+    partitionList_->setCurrentRow(0); // dispara onPartitionSelectionChanged
+    return;
+  }
+
   for (std::size_t i = 0; i < partitions_.size(); ++i) {
     QString letter = QString::fromStdString(partition_label(i));
     QString label = QString("Particao %1  (%2 blocos)").arg(letter).arg(partitions_[i].size_blocks);
@@ -217,8 +257,13 @@ void MainWindow::onPartitionSelectionChanged() {
   volumeList_->clear();
   programTree_->clear();
   convertBtn_->setEnabled(false);
-  partition_.reset();
 
+  if (isRoland_) {
+    rebuildVolumeList();
+    return;
+  }
+
+  partition_.reset();
   auto *item = partitionList_->currentItem();
   if (!item || !device_) return;
 
@@ -235,8 +280,26 @@ void MainWindow::onPartitionSelectionChanged() {
 
 void MainWindow::rebuildVolumeList() {
   volumeList_->clear();
-  if (!partition_) return;
 
+  if (isRoland_) {
+    if (!rolandDisk_) return;
+    auto volumes = rolandDisk_->list_active(roland_raw::FileType::Volume);
+    if (volumes.empty()) {
+      // Sem volume-scoping de Patch->Volume implementado ainda (ver README):
+      // um unico pseudo-item mostra todos os patches do disco.
+      auto *item = new QListWidgetItem("(todos os patches)", volumeList_);
+      item->setData(kRoleVolumeIndex, static_cast<qulonglong>(0));
+    } else {
+      for (const auto &v : volumes) {
+        auto *item = new QListWidgetItem(QString::fromStdString(v.name), volumeList_);
+        item->setData(kRoleVolumeIndex, static_cast<qulonglong>(v.index));
+      }
+    }
+    if (volumeList_->count() > 0) volumeList_->setCurrentRow(0);
+    return;
+  }
+
+  if (!partition_) return;
   for (std::size_t vi = 0; vi < partition_->volume_count(); ++vi) {
     raw::VolType vtype = partition_->volume_type(vi);
     QString typeLabel = volTypeLabel(vtype);
@@ -257,11 +320,37 @@ void MainWindow::onVolumeSelectionChanged() {
   programTree_->clear();
   convertBtn_->setEnabled(false);
 
+  if (isRoland_) {
+    rebuildProgramTreeRoland();
+    return;
+  }
+
   auto *volItem = volumeList_->currentItem();
   if (!volItem) return;
   currentVolumeIndex_ = volItem->data(kRoleVolumeIndex).toULongLong();
 
   rebuildProgramTree();
+}
+
+void MainWindow::rebuildProgramTreeRoland() {
+  programTree_->clear();
+  if (!rolandDisk_) return;
+
+  auto patches = rolandDisk_->list_active(roland_raw::FileType::Patch);
+  for (const auto &p : patches) {
+    QString name = QString::fromStdString(p.name);
+    auto *item = new QTreeWidgetItem(programTree_, {name});
+    item->setData(0, kRoleFileName, name);
+    // filho placeholder so para mostrar a seta de expandir; substituido
+    // pelas teclas/samples reais em onProgramItemExpanded.
+    auto *placeholder = new QTreeWidgetItem(item, {"carregando..."});
+    placeholder->setData(0, kRolePlaceholder, true);
+  }
+
+  statusLabel_->setText(
+      QString("%1 patch(es) (todos os patches do disco -- volume-scoping ainda nao "
+              "implementado, ver README).")
+          .arg(patches.size()));
 }
 
 void MainWindow::rebuildProgramTree() {
@@ -305,7 +394,77 @@ void MainWindow::onProgramItemExpanded(QTreeWidgetItem *item) {
 
   item->removeChild(child);
   delete child;
-  loadProgramSamples(item);
+
+  if (isRoland_) {
+    loadPatchPartialsRoland(item);
+  } else {
+    loadProgramSamples(item);
+  }
+}
+
+void MainWindow::loadPatchPartialsRoland(QTreeWidgetItem *patchItem) {
+  using namespace roland_raw;
+  if (!rolandDisk_) return;
+
+  std::string patchName = patchItem->data(0, kRoleFileName).toString().toStdString();
+
+  try {
+    RolandDirEntry patchEntry;
+    bool found = false;
+    for (std::size_t i = 0; i < kDirPatch.entry_count && !found; ++i) {
+      auto e = rolandDisk_->read_dir_entry(FileType::Patch, i);
+      if (e.is_active() && e.name == patchName) {
+        patchEntry = e;
+        found = true;
+      }
+    }
+    if (!found) {
+      new QTreeWidgetItem(patchItem, {"(patch nao encontrado)"});
+      return;
+    }
+
+    RolandPatch patch = parse_roland_patch(rolandDisk_->read_param(FileType::Patch, patchEntry.index));
+
+    std::size_t key = 0;
+    int shown = 0;
+    while (key < patch.partial_at_key.size()) {
+      std::uint16_t pidx = patch.partial_at_key[key];
+      std::size_t start = key;
+      while (key < patch.partial_at_key.size() && patch.partial_at_key[key] == pidx) ++key;
+      std::size_t end = key - 1;
+      if (pidx == kPartialListUnused) continue;
+      if (pidx >= kDirPartial.entry_count) continue;
+
+      int lokey = static_cast<int>(start) + 21;
+      int hikey = static_cast<int>(end) + 21;
+      auto partialEntry = rolandDisk_->read_dir_entry(FileType::Partial, pidx);
+      auto partial = parse_roland_partial(rolandDisk_->read_param(FileType::Partial, pidx));
+
+      QString rangeLabel = (lokey == hikey)
+          ? QString("%1: %2").arg(midiNoteName(lokey), QString::fromStdString(partialEntry.name))
+          : QString("%1-%2: %3")
+                .arg(midiNoteName(lokey), midiNoteName(hikey),
+                     QString::fromStdString(partialEntry.name));
+      auto *rangeItem = new QTreeWidgetItem(patchItem, {rangeLabel});
+
+      for (const auto &slot : partial.sample_slots) {
+        if (slot.sample_index >= kDirSample.entry_count) continue;
+        auto sampleEntry = rolandDisk_->read_dir_entry(FileType::Sample, slot.sample_index);
+        QString sLabel = QString("vel %1-%2  %3")
+                              .arg(slot.vel_lower)
+                              .arg(slot.vel_upper)
+                              .arg(QString::fromStdString(sampleEntry.name));
+        new QTreeWidgetItem(rangeItem, {sLabel});
+      }
+      ++shown;
+    }
+
+    if (shown == 0) {
+      new QTreeWidgetItem(patchItem, {"(sem teclas mapeadas)"});
+    }
+  } catch (const std::exception &e) {
+    new QTreeWidgetItem(patchItem, {QString("(erro ao ler patch: %1)").arg(e.what())});
+  }
 }
 
 void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
@@ -363,8 +522,12 @@ void MainWindow::loadProgramSamples(QTreeWidgetItem *programItem) {
 
 void MainWindow::onProgramCurrentItemChanged(QTreeWidgetItem *current, QTreeWidgetItem *) {
   if (!current || current->parent() != nullptr) {
-    // nada selecionado, ou selecionado e um sample (filho) -- nao convertivel diretamente
+    // nada selecionado, ou selecionado e um sample/tecla (filho) -- nao convertivel diretamente
     convertBtn_->setEnabled(false);
+    return;
+  }
+  if (isRoland_) {
+    convertBtn_->setEnabled(true); // todo item de topo em modo Roland e um Patch
     return;
   }
   QString ext = current->data(0, kRoleExt).toString();
@@ -376,12 +539,40 @@ void MainWindow::onBrowseOutputDir() {
   if (!dir.isEmpty()) outputDirEdit_->setText(dir);
 }
 
+void MainWindow::convertSelectedRoland(QTreeWidgetItem *patchItem, const QString &outDir) {
+  QString patchName = patchItem->data(0, kRoleFileName).toString();
+
+  log(QString("Convertendo patch '%1'...").arg(patchName));
+  statusLabel_->setText("Convertendo...");
+
+  ConvertResult result = convert_roland_patch(*rolandDisk_, patchName.toStdString(),
+                                               outDir.toStdString());
+
+  for (const auto &w : result.warnings) {
+    log("aviso: " + QString::fromStdString(w));
+  }
+
+  if (!result.success) {
+    log("erro: " + QString::fromStdString(result.error));
+    QMessageBox::critical(this, "Conversao falhou", QString::fromStdString(result.error));
+    statusLabel_->setText("Conversao falhou.");
+    return;
+  }
+
+  log(QString("OK: %1 (%2 WAV)")
+          .arg(QString::fromStdString(result.sfz_path))
+          .arg(result.wav_paths.size()));
+  statusLabel_->setText("Conversao concluida.");
+  QMessageBox::information(
+      this, "Conversao concluida",
+      QString("SFZ: %1\nArquivos WAV: %2")
+          .arg(QString::fromStdString(result.sfz_path))
+          .arg(result.wav_paths.size()));
+}
+
 void MainWindow::onConvertSelected() {
   QTreeWidgetItem *progItem = programTree_->currentItem();
-  if (!progItem || progItem->parent() != nullptr || !partition_) return;
-
-  QString volName = QString::fromStdString(partition_->volume_name(currentVolumeIndex_));
-  QString fileName = progItem->data(0, kRoleFileName).toString();
+  if (!progItem || progItem->parent() != nullptr) return;
 
   QString outDir = outputDirEdit_->text();
   if (outDir.isEmpty()) {
@@ -389,6 +580,16 @@ void MainWindow::onConvertSelected() {
                           "Escolha um diretorio de saida antes de converter.");
     return;
   }
+
+  if (isRoland_) {
+    if (!rolandDisk_) return;
+    convertSelectedRoland(progItem, outDir);
+    return;
+  }
+
+  if (!partition_) return;
+  QString volName = QString::fromStdString(partition_->volume_name(currentVolumeIndex_));
+  QString fileName = progItem->data(0, kRoleFileName).toString();
 
   log(QString("Convertendo %1/%2...").arg(volName, fileName));
   statusLabel_->setText("Convertendo...");

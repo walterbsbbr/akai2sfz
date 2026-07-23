@@ -1,11 +1,13 @@
 # akai2sfz
 
-Conversor nativo em C++ de imagens de CD/HD dos samplers Akai **S900 / S1000 / S3000**
-(partição, volume, FAT, programs e samples) para **SFZ** + WAV.
+Conversor nativo em C++ de imagens de CD/HD dos samplers **Akai S900/S1000/S3000**
+e **Roland S-750/S-760/S-770** para **SFZ** + WAV.
 
-Este projeto começa como a camada de filesystem (M0 do plano de arquitetura) e vai
-crescer em cima do trabalho já existente no diretório `AKAI/` deste repositório, em vez
-de reescrever do zero o que já está resolvido.
+Este projeto começa como a camada de filesystem Akai (M0 do plano de arquitetura) e vai
+crescer em cima do trabalho já existente no diretório `AKAI/`/`ROLAND/` deste
+repositório, em vez de reescrever do zero o que já está resolvido. O nome do projeto
+ficou `akai2sfz` por continuidade mesmo depois do suporte a Roland entrar (decisão
+consciente, não descuido).
 
 ## Proveniência — o que vem de onde
 
@@ -45,6 +47,30 @@ Outras ferramentas do diretório que informaram este projeto:
   o parser S3000 validado servem de referência funcional; a dependência de runtime
   Perl e o parser S1000 (ainda placeholder nesse protótipo) são o que este projeto
   soluciona.
+
+### Roland S-750/S-760/S-770
+
+O layout binário Roland (`include/akai2sfz/roland_raw_format.hpp`) vem de uma fonte
+única, mas de altíssima qualidade -- **não é engenharia reversa de terceiros**:
+
+- **"SYS-772 Ver.2.0 for S-750/770 Hard Disk/MO Disk/CD-ROM Format Manual"**,
+  revisão 1.00, 7 de maio de 1991, R&D J-1, Roland Electronics Corp. -- documento de
+  engenharia do próprio fabricante. Cópia local em
+  `../../ROLAND/Roland-S750-CDROM-Format/Roland-CDROM-S750.pdf`.
+
+Vários offsets do manual precisaram de correção depois de validados contra CDs reais
+(`../../ROLAND/*.iso`, 11 imagens disponíveis) -- documentado em detalhe nos
+comentários de `roland_raw_format.hpp` e no changelog do git, mas os dois achados mais
+importantes:
+
+- A relação Patch → Partial (`Partial List`, 88 entradas) é indexação **0-based
+  direta** por tecla, não uma indireção via "Partial Sel" como o desenho do formato
+  sugeria por analogia com outras listas (Volume→Performance, Performance→Patch). O
+  valor "não usado" é `0xFFFF`, não `0`.
+- O byte "Original Key" do parâmetro de Sample está no offset `0x2A`, não `0x2B` como
+  a leitura literal da ordem do manual sugere -- confirmado porque o valor lido em
+  `0x2A` batia exatamente com a nota do nome da própria amostra (`GTR:E3 Tap Hrm 1` →
+  `original_key=52` = MIDI E3) numa imagem real.
 
 Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
 
@@ -134,6 +160,37 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
       dependendo de `libsndfile` via Homebrew quando rodada fora do bundle
       da GUI -- não há um pacote standalone da CLI ainda (ver riscos).
 
+### RM0-RM2 -- suporte Roland S-750/S-760/S-770
+- [x] Filesystem Roland (`roland_filesystem.hpp/cpp`): ID area (detecção pela
+      assinatura `'S770 MR25A'`, mesma para os três modelos), FAT (16-bit, mesma
+      semântica geral do Akai), 5 diretórios planos (Volume/Performance/Patch/
+      Partial/Sample -- indexação direta, sem cadeia de FAT como no Akai). Ao
+      contrário do Akai, uma imagem Roland tem um único conjunto (sem múltiplas
+      partições). Validado contra 2 CDs bem diferentes (bateria e guitarras): as
+      contagens do ID area batem exatamente com o número de entradas ativas
+      encontradas, e os `fat_entry`/`capacity` de samples consecutivas são
+      sequenciais (evidência de que os offsets do diretório estão corretos).
+- [x] Parser de conteúdo (`roland_format.hpp/cpp`): Patch (mapa de 88 teclas →
+      Partial), Partial (até 4 samples/velocity layers com crossfade real via
+      `vel_lower`/`vel_upper`/fade width), Sample (pontos de loop, `original_key`).
+      Cadeia completa `Patch → Partial → Sample` validada ponta a ponta contra
+      dados reais (nomes se repetem/fazem sentido em cada nível, ex.:
+      `KIK:Gretsch Kik5` → partial `KIK:Gretsch kik5` → sample `KIK:Gretsch kik5`).
+- [x] Conversão (`roland_converter.cpp`): reaproveita `SfzRegion`/`write_sfz`/
+      `write_wav_mono16` -- as MESMAS funções usadas pelo lado Akai, sem
+      modificação. `pitch_keycenter` usa a própria tecla quando o Partial é
+      mapeado numa única tecla (comum em percussão, onde `original_key` pode não
+      ser confiável) e o `original_key` real quando a faixa é mais larga (comum
+      em instrumentos melódicos) -- ver riscos abaixo.
+- [x] CLI: `list`/`convert` detectam Roland automaticamente (tentativa de leitura
+      da assinatura antes de cair para Akai). `<ALVO>` para Roland é só o nome do
+      Patch (sem prefixo de volume, já que a busca é global -- ver "volume
+      scoping" nos riscos). `extract` ainda é só Akai.
+- [x] GUI: mesmas 3 colunas, significado adaptado -- Partições vira um único
+      pseudo-item "Disco Roland"; Volumes lista os volumes reais (ou um único
+      pseudo-item se não houver); Programs lista os Patches diretamente,
+      expansível para ver tecla → Partial → Sample.
+
 ### Riscos conhecidos / não totalmente validados
 - A codificação de afinação do S1000 (cents/semitons como bytes separados,
   `decode_s1000_tune` em `akai_format.cpp`) segue a descrição literal do doc
@@ -158,9 +215,32 @@ Licença: GPLv2, herdada do akaiutil original (ver `LICENSE`).
   compartilhar entre máquinas confiáveis, mas o Gatekeeper vai reclamar
   ("app de desenvolvedor não identificado") em instalações completamente
   novas até o usuário liberar manualmente. Não há notarização.
+- **Roland -- "volume scoping" não implementado**: a hierarquia real é
+  `Volume → Performance → Patch` (cada Volume tem uma lista de até 64
+  Performances, cada Performance uma lista de até 32 Patches), mas o
+  `convert_roland_patch()`/a GUI não percorrem essa cadeia -- listam e buscam
+  Patches globalmente no disco inteiro, ignorando a qual Volume pertencem.
+  Funciona bem nos CDs de teste (1-2 volumes), fica menos preciso em discos
+  com vários volumes distintos e patches de mesmo nome em volumes diferentes.
+- **Roland -- pan/tune sem calibração**: o mapeamento de `pan` (-64..+63 do
+  Roland para -100..100 do SFZ) e `tune` (coarse+fine) usa uma escala linear
+  razoável mas não confirmada contra áudio real -- diferente do
+  `pitch_keycenter`/loop points, que foram validados byte a byte contra
+  amostras reais, esses dois só foram conferidos estruturalmente (o código
+  roda e produz valores no intervalo esperado, não necessariamente calibrados).
+- **Roland -- taxa de amostragem fixa em 44100 Hz**: o manual não documenta o
+  mapeamento de bits do campo "Sample Frequency/Mode" pro S-750/770
+  especificamente (só formatos anteriores, com tabela provavelmente
+  diferente). Se um CD real usar uma taxa diferente de 44.1kHz, o WAV gerado
+  vai tocar na velocidade/altura erradas -- nenhuma das amostras testadas
+  neste projeto expôs esse problema de forma óbvia, mas não foi confirmado.
+- **Roland -- `loop_mode=Alternate` (ping-pong) e `Reverse`** são mapeados
+  para `loop_continuous` do SFZ por falta de equivalente nativo -- perde a
+  direção alternada/reversa do loop original.
 
-Plano completo de arquitetura e auditoria dos 6 repositórios: ver o artefato gerado
-na sessão que criou este projeto (auditoria de 2026-07-22).
+Plano completo de arquitetura e auditoria dos 6 repositórios Akai: ver o artefato da
+sessão que criou este projeto (2026-07-22). Plano de integração Roland: ver o artefato
+da sessão que adicionou esse suporte (2026-07-23).
 
 ## Build
 
@@ -187,13 +267,21 @@ assinado ad-hoc) e `build/apps/gui/akai2sfz_gui.dmg` ao lado.
 
 ### CLI
 
-Aceita `.iso`, `.cue`, `.bin` (com ou sem `.cue` ao lado), `.nrg` e `.mdf`.
+Aceita `.iso`, `.cue`, `.bin` (com ou sem `.cue` ao lado), `.nrg` e `.mdf`. O
+fabricante (Akai ou Roland) é detectado automaticamente pela imagem.
 
 ```sh
+# Akai -- <ALVO> = VOLUME/PROGRAM
 ./build/akai2sfz list caminho/para/imagem.iso
 ./build/akai2sfz extract caminho/para/imagem.cue "/VOLUME/ARQUIVO" ./saida
 ./build/akai2sfz convert caminho/para/imagem.nrg "/VOLUME/PROGRAM" ./saida
+
+# Roland -- <ALVO> = nome do Patch (sem prefixo de volume, busca e global)
+./build/akai2sfz list caminho/para/imagem_roland.iso
+./build/akai2sfz convert caminho/para/imagem_roland.iso "KIK:Gretsch Kik5" ./saida
 ```
+
+`extract` e a opção `-p` (partição) ainda são só para Akai.
 
 ### GUI
 
@@ -203,6 +291,7 @@ Aceita `.iso`, `.cue`, `.bin` (com ou sem `.cue` ao lado), `.nrg` e `.mdf`.
 open build/apps/gui/akai2sfz_gui.app
 ```
 
-Abra uma imagem (ISO/CUE/BIN/NRG/MDF), navegue Partições → Volumes →
-Programs, clique num program para expandir e ver os samples referenciados,
-escolha o diretório de saída e converta.
+Abra uma imagem (Akai ou Roland, qualquer formato de container suportado),
+navegue Partições → Volumes → Programs, clique num program/patch para
+expandir e ver os samples referenciados, escolha o diretório de saída e
+converta.

@@ -1,7 +1,10 @@
-// akai2sfz CLI -- list/extract/convert sobre a camada de filesystem Akai.
+// akai2sfz CLI -- list/extract/convert sobre a camada de filesystem
+// Akai (S1000/S3000) e Roland (S-750/S-760/S-770).
 #include "akai2sfz/converter.hpp"
 #include "akai2sfz/filesystem.hpp"
 #include "akai2sfz/image.hpp"
+#include "akai2sfz/roland_converter.hpp"
+#include "akai2sfz/roland_filesystem.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -13,12 +16,19 @@ using namespace akai2sfz;
 namespace {
 
 void print_usage(const char *argv0) {
-  std::cerr << "uso:\n"
-            << "  " << argv0 << " list <imagem> [-p particao(1-based)]\n"
-            << "  " << argv0 << " extract <imagem> <VOLUME/ARQUIVO> <dir_saida> [-p particao]\n"
-            << "  " << argv0 << " convert <imagem> <VOLUME/PROGRAM> <dir_saida> [-p particao]\n"
-            << "                 (aceita programs S1000 .a1p ou S3000 .a3p)\n";
+  std::cerr
+      << "uso:\n"
+      << "  " << argv0 << " list <imagem> [-p particao(1-based)]\n"
+      << "  " << argv0 << " extract <imagem> <VOLUME/ARQUIVO> <dir_saida> [-p particao]\n"
+      << "  " << argv0 << " convert <imagem> <ALVO> <dir_saida> [-p particao]\n"
+      << "\n"
+      << "O fabricante (Akai ou Roland) e detectado automaticamente pela imagem.\n"
+      << "  Akai:   <ALVO> = VOLUME/PROGRAM (aceita programs S1000 .a1p ou S3000 .a3p)\n"
+      << "  Roland: <ALVO> = nome do Patch (ex.: \"KIK:Gretsch Kik5\"); 'extract' e "
+         "'-p' nao se aplicam a Roland ainda\n";
 }
+
+// --- Akai ---
 
 std::string vol_type_label(raw::VolType t) {
   switch (t) {
@@ -29,7 +39,7 @@ std::string vol_type_label(raw::VolType t) {
   }
 }
 
-int cmd_list(const std::string &image_path, std::size_t partition_1based) {
+int cmd_list_akai(const std::string &image_path, std::size_t partition_1based) {
   auto dev = open_cd_image(image_path);
   auto partitions = scan_partitions(*dev);
 
@@ -62,8 +72,8 @@ int cmd_list(const std::string &image_path, std::size_t partition_1based) {
 
     auto files = list_files(part, vi);
     for (const auto &f : files) {
-      std::cout << "  " << file_type_name(f.type) << "\t" << f.size << "\t"
-                << f.name << "." << f.extension << "\n";
+      std::cout << "  " << file_type_name(f.type) << "\t" << f.size << "\t" << f.name << "."
+                << f.extension << "\n";
       ++total_entries;
     }
     std::cout << "\n";
@@ -84,8 +94,8 @@ bool split_vol_file(const std::string &path, std::string &vol, std::string &file
   return !vol.empty() && !file.empty();
 }
 
-int cmd_extract(const std::string &image_path, const std::string &akai_path,
-                 const std::string &out_dir, std::size_t partition_1based) {
+int cmd_extract_akai(const std::string &image_path, const std::string &akai_path,
+                      const std::string &out_dir, std::size_t partition_1based) {
   std::string vol_name, file_name;
   if (!split_vol_file(akai_path, vol_name, file_name)) {
     std::cerr << "caminho invalido, esperado VOLUME/ARQUIVO: " << akai_path << "\n";
@@ -126,8 +136,8 @@ int cmd_extract(const std::string &image_path, const std::string &akai_path,
   return 1;
 }
 
-int cmd_convert(const std::string &image_path, const std::string &akai_path,
-                 const std::string &out_dir, std::size_t partition_1based) {
+int cmd_convert_akai(const std::string &image_path, const std::string &akai_path,
+                      const std::string &out_dir, std::size_t partition_1based) {
   std::string vol_name, program_name;
   if (!split_vol_file(akai_path, vol_name, program_name)) {
     std::cerr << "caminho invalido, esperado VOLUME/PROGRAM: " << akai_path << "\n";
@@ -158,6 +168,43 @@ int cmd_convert(const std::string &image_path, const std::string &akai_path,
   return 0;
 }
 
+// --- Roland ---
+
+int cmd_list_roland(RolandDisk &disk) {
+  using namespace roland_raw;
+  std::cout << "disco Roland '" << disk.drive_name() << "' (" << disk.capacity_blocks()
+            << " blocos)\n\n";
+
+  auto patches = disk.list_active(FileType::Patch);
+  std::cout << patches.size() << " patch(es):\n";
+  for (const auto &p : patches) {
+    std::cout << "  " << p.name << "\n";
+  }
+
+  auto samples = disk.list_active(FileType::Sample);
+  std::cerr << "\ntotal: " << patches.size() << " patch(es), " << samples.size()
+            << " sample(s)\n";
+  return 0;
+}
+
+int cmd_convert_roland(RolandDisk &disk, const std::string &patch_name,
+                        const std::string &out_dir) {
+  ConvertResult r = convert_roland_patch(disk, patch_name, out_dir);
+
+  for (const auto &w : r.warnings) {
+    std::cerr << "aviso: " << w << "\n";
+  }
+
+  if (!r.success) {
+    std::cerr << "erro: " << r.error << "\n";
+    return 1;
+  }
+
+  std::cerr << "SFZ: " << r.sfz_path << "\n";
+  std::cerr << "WAV: " << r.wav_paths.size() << " arquivo(s)\n";
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -167,7 +214,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // opcao -p <n>, pode estar em qualquer posicao
+  // opcao -p <n>, pode estar em qualquer posicao (so usada para Akai)
   std::size_t partition = 1;
   for (std::size_t i = 0; i < args.size();) {
     if (args[i] == "-p" && i + 1 < args.size()) {
@@ -180,13 +227,23 @@ int main(int argc, char **argv) {
 
   try {
     if (args[0] == "list" && args.size() >= 2) {
-      return cmd_list(args[1], partition);
+      BlockDevice rdev(args[1], roland_raw::kBlockSize);
+      if (looks_like_roland(rdev)) {
+        RolandDisk disk(rdev);
+        return cmd_list_roland(disk);
+      }
+      return cmd_list_akai(args[1], partition);
     }
     if (args[0] == "extract" && args.size() >= 4) {
-      return cmd_extract(args[1], args[2], args[3], partition);
+      return cmd_extract_akai(args[1], args[2], args[3], partition);
     }
     if (args[0] == "convert" && args.size() >= 4) {
-      return cmd_convert(args[1], args[2], args[3], partition);
+      BlockDevice rdev(args[1], roland_raw::kBlockSize);
+      if (looks_like_roland(rdev)) {
+        RolandDisk disk(rdev);
+        return cmd_convert_roland(disk, args[2], args[3]);
+      }
+      return cmd_convert_akai(args[1], args[2], args[3], partition);
     }
   } catch (const std::exception &e) {
     std::cerr << "erro: " << e.what() << "\n";
