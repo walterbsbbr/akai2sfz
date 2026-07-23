@@ -42,22 +42,34 @@ if(APPLE)
       HINTS ${Qt6_DIR}/../../../bin /opt/homebrew/opt/qt/bin /opt/homebrew/bin
   )
   if(MACDEPLOYQT_EXECUTABLE)
-    # 3 passos separados (nao usar a flag -dmg do macdeployqt direto):
-    # 1) bundla Qt + libsndfile (e tudo que eles arrastam) para dentro do .app
+    # Empacota numa COPIA isolada em build/dist/, nunca no .app original de
+    # apps/gui/CMakeFiles/... -- rodar macdeployqt direto no .app de
+    # desenvolvimento o deixa com dois cópias de Qt carregadas (Homebrew +
+    # embutida) em qualquer build normal seguinte, causando
+    # "QObject::moveToThread" / "Could not load the Qt platform plugin
+    # cocoa" e crash ao abrir. Passos:
+    # 0) copia o .app recem-buildado para build/dist/ (limpando antes)
+    # 1) bundla Qt + libsndfile (e tudo que eles arrastam) para dentro da copia
     # 2) reassina ad-hoc -- macdeployqt invalida a assinatura ao copiar libs
     #    para dentro do bundle, e o macOS (Apple Silicon) recusa rodar/montar
     #    um .app com assinatura quebrada
     # 3) so entao gera o .dmg, a partir do .app ja assinado
+    set(_wjvsc_dist_dir "${CMAKE_BINARY_DIR}/dist")
+    set(_wjvsc_dist_app "${_wjvsc_dist_dir}/WJ-VSC.app")
     add_custom_target(package_gui
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_wjvsc_dist_app}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_wjvsc_dist_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                $<TARGET_BUNDLE_DIR:WJ-VSC> "${_wjvsc_dist_app}"
         COMMAND ${MACDEPLOYQT_EXECUTABLE}
-                $<TARGET_BUNDLE_DIR:WJ-VSC>
+                "${_wjvsc_dist_app}"
                 -verbose=1
-        COMMAND codesign --force --deep --sign - $<TARGET_BUNDLE_DIR:WJ-VSC>
-        COMMAND hdiutil create -volname WJ-VSC -srcfolder $<TARGET_BUNDLE_DIR:WJ-VSC>
+        COMMAND codesign --force --deep --sign - "${_wjvsc_dist_app}"
+        COMMAND hdiutil create -volname WJ-VSC -srcfolder "${_wjvsc_dist_app}"
                 -ov -format UDZO
-                $<TARGET_BUNDLE_DIR:WJ-VSC>/../WJ-VSC.dmg
+                "${_wjvsc_dist_dir}/WJ-VSC.dmg"
         DEPENDS WJ-VSC
-        COMMENT "Empacotando WJ-VSC.app (Qt + libsndfile), reassinando e gerando .dmg"
+        COMMENT "Empacotando WJ-VSC.app (copia isolada em build/dist/, Qt + libsndfile embutidos), reassinando e gerando .dmg"
         VERBATIM
     )
   else()

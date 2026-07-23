@@ -479,8 +479,10 @@ CLI é gerada (`-DAKAI2SFZ_BUILD_GUI=OFF` força isso).
 cmake --build build --target package_gui
 ```
 
-Gera `build/apps/gui/WJ-VSC.app` (Qt e `libsndfile` já embutidos,
-assinado ad-hoc) e `build/apps/gui/WJ-VSC.dmg` ao lado.
+Gera `build/dist/WJ-VSC.app` (Qt e `libsndfile` já embutidos, assinado
+ad-hoc) e `build/dist/WJ-VSC.dmg` ao lado -- uma cópia separada do `.app` de
+desenvolvimento, pra não deixá-lo com duas cópias de Qt carregadas (Homebrew
++ embutida) em builds normais seguintes.
 
 ## Uso
 
@@ -515,7 +517,7 @@ fabricante (Akai, Roland, E-mu ou Kurzweil) é detectado automaticamente pela im
 ```sh
 ./build/apps/gui/WJ-VSC.app/Contents/MacOS/WJ-VSC   # direto do build
 # ou, depois de `cmake --build build --target package_gui`:
-open build/apps/gui/WJ-VSC.app
+open build/dist/WJ-VSC.app
 ```
 
 A GUI se chama **WJ-VSC** (Vintage Sampler Converter) -- nome e ícone (um CD
